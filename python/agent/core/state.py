@@ -30,6 +30,9 @@ class AgentState:
         attention_window_size: Number of items in attention window
         sleep_state: Current sleep state ("awake" or "sleeping")
         last_awakened: Timestamp of last awakening
+        last_slept: Timestamp of last sleep
+        wake_duration_seconds: How long to stay awake (default 300 = 5 min)
+        sleep_duration_seconds: How long to sleep (default 3600 = 1 hour)
         total_cycles: Total number of cognitive cycles
     """
     
@@ -51,6 +54,9 @@ class AgentState:
     attention_window_size: int = 3
     sleep_state: str = "awake"
     last_awakened: Optional[datetime] = None
+    last_slept: Optional[datetime] = None
+    wake_duration_seconds: int = 300
+    sleep_duration_seconds: int = 3600
     total_cycles: int = 0
     
     def __post_init__(self) -> None:
@@ -58,6 +64,8 @@ class AgentState:
         self.curiosity_level = max(0.0, min(1.0, self.curiosity_level))
         self.fit_threshold = max(0.0, min(1.0, self.fit_threshold))
         self.attention_window_size = max(1, self.attention_window_size)
+        self.wake_duration_seconds = max(1, self.wake_duration_seconds)
+        self.sleep_duration_seconds = max(1, self.sleep_duration_seconds)
         
         if self.sleep_state not in ("awake", "sleeping"):
             self.sleep_state = "awake"
@@ -90,6 +98,14 @@ class AgentState:
         if "last_awakened" in data and data["last_awakened"]:
             data["last_awakened"] = datetime.fromisoformat(data["last_awakened"])
         
+        if "last_slept" in data and data["last_slept"]:
+            data["last_slept"] = datetime.fromisoformat(data["last_slept"])
+        
+        if "wake_duration_seconds" not in data:
+            data["wake_duration_seconds"] = 300
+        if "sleep_duration_seconds" not in data:
+            data["sleep_duration_seconds"] = 3600
+        
         return cls(**data)
     
     def save(self, state_path: Optional[Path] = None) -> None:
@@ -108,6 +124,8 @@ class AgentState:
         data = asdict(self)
         if data["last_awakened"]:
             data["last_awakened"] = data["last_awakened"].isoformat()
+        if data["last_slept"]:
+            data["last_slept"] = data["last_slept"].isoformat()
         
         state_path.write_text(
             json.dumps(data, ensure_ascii=False, indent=2),
@@ -124,7 +142,9 @@ class AgentState:
         valid_fields = {
             "seed", "personality", "curiosity_level", 
             "fit_threshold", "attention_window_size", 
-            "sleep_state", "total_cycles"
+            "sleep_state", "total_cycles", 
+            "last_awakened", "last_slept",
+            "wake_duration_seconds", "sleep_duration_seconds"
         }
         
         for key, value in kwargs.items():
@@ -139,8 +159,9 @@ class AgentState:
         self.last_awakened = datetime.now()
     
     def sleep(self) -> None:
-        """Mark the agent as sleeping."""
+        """Mark the agent as sleeping and record timestamp."""
         self.sleep_state = "sleeping"
+        self.last_slept = datetime.now()
     
     def increment_cycle(self) -> None:
         """Increment the total cycle counter."""
@@ -156,6 +177,8 @@ class AgentState:
         data = asdict(self)
         if data["last_awakened"]:
             data["last_awakened"] = data["last_awakened"].isoformat()
+        if data["last_slept"]:
+            data["last_slept"] = data["last_slept"].isoformat()
         return data
     
     @classmethod
@@ -178,6 +201,9 @@ class AgentState:
             attention_window_size=3,
             sleep_state="awake",
             last_awakened=datetime.now(),
+            last_slept=None,
+            wake_duration_seconds=300,
+            sleep_duration_seconds=3600,
             total_cycles=0
         )
 

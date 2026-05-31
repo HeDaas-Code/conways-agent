@@ -10,6 +10,7 @@ Provides core agent functionality including:
 - World fragments
 - LLM integration
 - Consistency constraint engine
+- Sleep/wake cycle management
 """
 
 from .startup import initialize_agent, get_current_state, startup_message
@@ -20,6 +21,7 @@ from .world_fragment import WorldFragment
 from .llm import LLMClient, LLMResponse
 from .consistency import ConsistencyEngine, ConsistencyCheck, Conflict, ConflictResolution
 from .memory import MemorySystem
+from .cycle import SleepWakeCycle
 
 __all__ = [
     "initialize_agent",
@@ -39,4 +41,5 @@ __all__ = [
     "Conflict",
     "ConflictResolution",
     "MemorySystem",
+    "SleepWakeCycle",
 ]

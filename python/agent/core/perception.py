@@ -56,12 +56,65 @@ class PerceptionSystem:
     - Batch perception of multiple files
     - Perception history tracking
     - Filtering out agent/ directory to avoid self-perception loops
+    - Awareness modes: active (full processing) and passive (event detection only)
     """
     
     def __init__(self) -> None:
         """Initialize the perception system with empty history."""
         self._perception_history: list[PerceptionInput] = []
         self._max_history: int = 100
+        self._awareness_mode: bool = True  # True = active, False = passive
+    
+    def set_awareness_mode(self, awake: bool) -> None:
+        """
+        Set awareness mode.
+        
+        Args:
+            awake: True = active processing, False = passive only
+        """
+        previous_mode = "active" if self._awareness_mode else "passive"
+        self._awareness_mode = awake
+        new_mode = "active" if awake else "passive"
+        
+        log_event(
+            "awareness_mode_change",
+            f"Awareness mode changed: {previous_mode} -> {new_mode}",
+            {"awake": awake, "mode": new_mode}
+        )
+    
+    @property
+    def is_active_mode(self) -> bool:
+        """
+        Check if in active processing mode.
+        
+        Returns:
+            bool: True if active (awake), False if passive (sleeping)
+        """
+        return self._awareness_mode
+    
+    def process_passive_event(self, event: dict) -> None:
+        """
+        Process a file event in passive mode.
+        
+        In passive mode, events are detected but NOT actively processed.
+        Just log the event for future reference.
+        
+        Args:
+            event: Event data with keys like 'path', 'type', 'timestamp'
+        """
+        if self._awareness_mode:
+            return
+        
+        log_event(
+            "passive_event",
+            f"Passive awareness: detected {event.get('type', 'unknown')} event",
+            {
+                "path": event.get("path", "unknown"),
+                "event_type": event.get("type", "unknown"),
+                "timestamp": event.get("timestamp", ""),
+                "mode": "passive",
+            }
+        )
     
     def perceive_file(self, path: str, trigger: str = "manual") -> PerceptionInput:
         """
@@ -78,6 +131,17 @@ class PerceptionSystem:
             FileNotFoundError: If file doesn't exist
             ValueError: If file is in agent/ directory (self-perception)
         """
+        if not self._awareness_mode:
+            log_event(
+                "perception_blocked",
+                f"Perception blocked - in passive mode: {path}",
+                {"file_path": path, "mode": "passive"}
+            )
+            raise ValueError(
+                f"Cannot perceive files in passive mode: {path}. "
+                "Wake the agent to enable active perception."
+            )
+        
         vault_path = get_vault_path()
         file_full_path = vault_path / path
         

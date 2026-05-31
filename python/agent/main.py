@@ -34,6 +34,8 @@ from agent import (
     ProcessingPipeline,
 )
 from agent.core.vault import ensure_vault_dirs
+from agent.core.cycle import SleepWakeCycle
+from agent.core.state import AgentState
 
 
 def signal_handler(signum: int, frame) -> None:
@@ -141,6 +143,70 @@ def run_interactive_mode() -> None:
             log_cycle(cycle_count)
 
 
+def run_daemon_mode() -> None:
+    """
+    Run in daemon mode - sleep/wake cycle loop.
+    
+    This mode:
+    1. Wakes up the agent
+    2. Processes perception queue for wake_duration
+    3. Goes to sleep
+    4. Repeats
+    """
+    import os
+    
+    print("正在启动 Daemon 模式 — 睡眠/唤醒循环...")
+    ensure_vault_dirs()
+    
+    state = initialize_agent()
+    print(startup_message(state))
+    
+    cycle = SleepWakeCycle(state)
+    
+    wake_duration = state.wake_duration_seconds
+    sleep_duration = state.sleep_duration_seconds
+    
+    print(f"\n循环配置:")
+    print(f"  唤醒时长: {wake_duration} 秒 ({wake_duration // 60} 分钟)")
+    print(f"  休眠时长: {sleep_duration} 秒 ({sleep_duration // 60} 分钟)")
+    print()
+    print("Daemon 运行中，按 Ctrl+C 退出...\n")
+    
+    try:
+        while True:
+            if not cycle.is_awake:
+                if cycle.is_time_to_wake():
+                    print("\n[唤醒] Agent 正在苏醒...")
+                    cycle.wake()
+                    print("[唤醒] 进入主动处理模式")
+                else:
+                    time.sleep(1)
+                    cycle.tick()
+                continue
+            
+            print(f"[活跃] Agent 正在处理 (剩余 {cycle.get_cycle_status()['time_remaining_seconds']:.0f} 秒)")
+            
+            time.sleep(min(10, cycle.get_cycle_status()['time_remaining_seconds']))
+            
+            if cycle.is_time_to_sleep():
+                print("\n[休眠] Agent 正在进入休眠状态...")
+                cycle.sleep()
+                print("[休眠] 进入被动感知模式")
+                log_event(
+                    "daemon_sleep",
+                    f"Daemon sleeping for {sleep_duration} seconds",
+                    {"sleep_duration": sleep_duration}
+                )
+            else:
+                cycle.tick()
+                
+    except KeyboardInterrupt:
+        print("\n\n正在关闭 Daemon...")
+        log_shutdown("Daemon interrupted by user")
+        print("Daemon 已停止。")
+        sys.exit(0)
+
+
 def main() -> None:
     """
     Main entry point for the agent.
@@ -149,6 +215,7 @@ def main() -> None:
     1. Interactive mode (default): Agent runs in continuous loop
     2. Perception mode: Perceive specific files
     3. Perceive-all mode: Perceive all user files in vault
+    4. Daemon mode: Sleep/wake cycle loop
     """
     parser = argparse.ArgumentParser(
         description="Conway's Agent - Obsidian Cognitive Agent",
@@ -159,6 +226,7 @@ Examples:
   python -m agent.main --perceive notes/ideas.md          # Perceive single file
   python -m agent.main --perceive notes/1.md notes/2.md  # Perceive multiple files
   python -m agent.main --perceive-all                     # Perceive all vault files
+  python -m agent.main --daemon                           # Daemon mode with sleep/wake cycle
         """
     )
     
@@ -175,13 +243,21 @@ Examples:
         help="Perceive all user files in the vault (excludes agent/ directory)"
     )
     
+    parser.add_argument(
+        "--daemon",
+        action="store_true",
+        help="Run in daemon mode with sleep/wake cycle"
+    )
+    
     args = parser.parse_args()
     
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
     try:
-        if args.perceive_all:
+        if args.daemon:
+            run_daemon_mode()
+        elif args.perceive_all:
             run_perceive_all_mode()
         elif args.perceive:
             run_perception_mode(args.perceive)
