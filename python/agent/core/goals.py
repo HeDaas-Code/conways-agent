@@ -254,23 +254,39 @@ class GoalSystem:
 
             prefixes_to_try = ['子目标1', '子目标2', '子目标3', '子目标4', '子目标5',
                                '1.', '2.', '3.', '4.', '5.', '- ', '* ']
+            matched_prefix = None
             for prefix in prefixes_to_try:
                 if line.startswith(prefix):
+                    matched_prefix = prefix
                     line = line[len(prefix):].strip()
                     break
 
-            if '：' in line or ':' in line:
-                delimiter = '：' if '：' in line else ':'
-                parts = line.split(delimiter, 1)
+            if matched_prefix:
+                line = line.strip('：:').strip()
+                line = line.lstrip('—–: -')
+
+            delimiters = ['—', '–', '：', ':', ' - ']
+            found_delimiter = None
+            for delimiter in delimiters:
+                if delimiter in line:
+                    found_delimiter = delimiter
+                    break
+
+            if found_delimiter:
+                parts = line.split(found_delimiter, 1)
                 title = parts[0].strip()
                 description = parts[1].strip() if len(parts) > 1 else ""
 
                 title = title.lstrip('0123456789.、) ')
-                description = description.lstrip('—\-–: ')
+                description = description.lstrip('—-–: ')
                 description = description.rstrip('。.')
 
                 if title:
                     sub_goals.append((title, description))
+            elif matched_prefix and line:
+                title = line.lstrip('0123456789.、) ')
+                if title:
+                    sub_goals.append((title, ""))
 
         return sub_goals
 

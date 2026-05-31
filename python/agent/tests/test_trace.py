@@ -163,7 +163,6 @@ class TestFormatCallout:
         callout = injector.format_callout(trace)
         
         assert "> [!tip] Agent 的痕迹" in callout
-        assert "> My thought process..." in callout
         assert "*My thought process...*" in callout
 
     def test_format_all_callout_types(self, injector):

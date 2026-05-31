@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-CALLout_TYPES = ("note", "question", "tip", "warning", "danger")
+CALLOUT_TYPES = ("note", "question", "tip", "warning", "danger")
 
 
 @dataclass
