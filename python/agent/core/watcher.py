@@ -8,11 +8,110 @@ to the attention window for processing.
 from __future__ import annotations
 
 import threading
+import time
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
 from ..log import log_event
+
+
+@dataclass
+class FileEvent:
+    """
+    Represents a file save event.
+    
+    Attributes:
+        path: Path to the file (relative to vault)
+        event_type: Type of event ("created" | "modified" | "deleted" | "moved" | "saved")
+        timestamp: When the event was detected
+    """
+    path: str
+    event_type: str
+    timestamp: datetime = field(default_factory=datetime.now)
+
+
+class WriteDebouncer:
+    """
+    Debounces file write events to detect when a file is truly saved.
+    
+    In Obsidian, "save" means the file is written to disk.
+    This class waits until a file hasn't changed for N seconds before emitting.
+    """
+    
+    def __init__(self, debounce_seconds: float = 1.0):
+        """
+        Initialize the debouncer.
+        
+        Args:
+            debounce_seconds: Wait time after last modification before emitting
+        """
+        self.debounce_seconds = debounce_seconds
+        self.pending_writes: dict[str, datetime] = {}
+        self.settled: set[str] = set()
+    
+    def mark_modified(self, path: str) -> None:
+        """
+        Mark that a file was modified.
+        
+        Args:
+            path: Path to the modified file
+        """
+        self.pending_writes[path] = datetime.now()
+        self.settled.discard(path)
+    
+    def check_settled(self, path: str) -> bool:
+        """
+        Check if a file has settled (no more modifications for debounce period).
+        
+        Args:
+            path: Path to check
+            
+        Returns:
+            bool: True if file has settled
+        """
+        if path not in self.pending_writes:
+            return False
+        
+        elapsed = (datetime.now() - self.pending_writes[path]).total_seconds()
+        return elapsed >= self.debounce_seconds
+    
+    def get_settled(self) -> list[str]:
+        """
+        Get all files that have settled since last check.
+        
+        Returns:
+            list[str]: Paths of files ready to emit
+        """
+        settled_files: list[str] = []
+        now = datetime.now()
+        
+        for path, modified_time in list(self.pending_writes.items()):
+            elapsed = (now - modified_time).total_seconds()
+            if elapsed >= self.debounce_seconds:
+                settled_files.append(path)
+                del self.pending_writes[path]
+                self.settled.add(path)
+        
+        return settled_files
+    
+    def is_pending(self, path: str) -> bool:
+        """
+        Check if a file has pending (unsettled) modifications.
+        
+        Args:
+            path: Path to check
+            
+        Returns:
+            bool: True if file has pending modifications
+        """
+        return path in self.pending_writes
+    
+    def clear(self) -> None:
+        """Clear all pending writes."""
+        self.pending_writes.clear()
+        self.settled.clear()
 
 
 class VaultWatcher:
@@ -33,7 +132,8 @@ class VaultWatcher:
     def __init__(
         self,
         vault_path: Optional[Path] = None,
-        poll_interval: float = 2.0
+        poll_interval: float = 2.0,
+        debounce_seconds: float = 1.0
     ):
         """
         Initialize the vault watcher.
@@ -41,6 +141,7 @@ class VaultWatcher:
         Args:
             vault_path: Path to the vault directory. Defaults to vault path from config.
             poll_interval: How often to check for changes (seconds)
+            debounce_seconds: Time to wait before emitting save events after last modification
         """
         if vault_path is None:
             from .vault import get_vault_path
@@ -48,11 +149,13 @@ class VaultWatcher:
         
         self.vault_path = Path(vault_path)
         self.poll_interval = poll_interval
+        self.debouncer = WriteDebouncer(debounce_seconds=debounce_seconds)
         
         self._running: bool = False
         self._thread: Optional[threading.Thread] = None
         self._last_mtimes: dict[str, float] = {}
         self._callbacks: list[Callable[[dict], None]] = []
+        self._pending_events: list[FileEvent] = []
         
         # Scan initial state
         self._scan_initial_state()
@@ -186,33 +289,87 @@ class VaultWatcher:
         """
         Emit a file change event.
         
+        For "modify" events, uses debouncing to only emit when file is truly saved.
+        
         Args:
             event_type: Type of event ("create", "modify", "delete")
             path: Relative path to the file
         """
-        event = {
-            "type": event_type,
+        if event_type == "modify":
+            # Mark as modified for debouncing
+            self.debouncer.mark_modified(path)
+        elif event_type == "delete":
+            # Delete events are immediate
+            self._handle_save_event(path, event_type)
+        else:
+            # Create events are immediate
+            self._handle_save_event(path, event_type)
+    
+    def _handle_save_event(self, path: str, original_type: str) -> None:
+        """
+        Handle a save event after debouncing.
+        
+        Args:
+            path: Path to the file
+            original_type: Original event type
+        """
+        event = FileEvent(
+            path=path,
+            event_type=original_type,
+            timestamp=datetime.now()
+        )
+        self._pending_events.append(event)
+        
+        log_event(
+            f"vault_file_saved",
+            f"Vault file saved: {path}",
+            {"path": path, "original_type": original_type}
+        )
+        
+        # Notify all callbacks
+        callback_event = {
+            "type": original_type,
             "path": path,
             "timestamp": datetime.now().isoformat(),
             "vault_path": str(self.vault_path)
         }
-        
-        log_event(
-            f"vault_file_{event_type}",
-            f"Vault file {event_type}: {path}",
-            event
-        )
-        
-        # Notify all callbacks
         for callback in self._callbacks:
             try:
-                callback(event)
+                callback(callback_event)
             except Exception as e:
                 log_event(
                     "watcher_callback_error",
                     f"Error in watcher callback: {e}",
                     {"path": path, "error": str(e)}
                 )
+    
+    def watch_once(self) -> list[FileEvent]:
+        """
+        Check for settled file events (debounced saves).
+        
+        This should be called periodically to collect settled events.
+        Files that haven't been modified for debounce_seconds will be emitted.
+        
+        Returns:
+            list[FileEvent]: List of file events that have settled
+        """
+        settled_paths = self.debouncer.get_settled()
+        events: list[FileEvent] = []
+        
+        for path in settled_paths:
+            event = FileEvent(
+                path=path,
+                event_type="saved",
+                timestamp=datetime.now()
+            )
+            events.append(event)
+            self._pending_events.append(event)
+            self._handle_save_event(path, "saved")
+        
+        # Return pending events and clear
+        result = self._pending_events.copy()
+        self._pending_events.clear()
+        return result
     
     def on_file_change(self, callback: Callable[[dict], None]) -> None:
         """
@@ -252,6 +409,10 @@ class VaultWatcher:
     def get_watched_files(self) -> list[str]:
         """Get list of files currently being watched."""
         return list(self._last_mtimes.keys())
+    
+    def has_pending(self) -> bool:
+        """Check if there are any pending (unsettled) files."""
+        return len(self.debouncer.pending_writes) > 0
 
 
 class AttentionAwareWatcher:
@@ -341,4 +502,4 @@ class AttentionAwareWatcher:
         return self._base_watcher.is_running()
 
 
-__all__ = ["VaultWatcher", "AttentionAwareWatcher"]
+__all__ = ["VaultWatcher", "AttentionAwareWatcher", "FileEvent", "WriteDebouncer"]

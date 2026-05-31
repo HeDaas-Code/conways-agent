@@ -12,9 +12,6 @@ Provides core agent functionality including:
 - Consistency constraint engine
 - Sleep/wake cycle management
 - Dialogue system
-- Vault file watcher with debouncing
-- File activity tracking
-- Attention window for bounded perception
 """
 
 from .startup import initialize_agent, get_current_state, startup_message
@@ -27,9 +24,6 @@ from .consistency import ConsistencyEngine, ConsistencyCheck, Conflict, Conflict
 from .memory import MemorySystem
 from .cycle import SleepWakeCycle
 from .dialogue import DialogueTurn, DialogueSession
-from .watcher import VaultWatcher, AttentionAwareWatcher
-from .activity import FileActivity, FileActivityTracker
-from .attention import AttentionSlot, AttentionWindow
 
 __all__ = [
     "initialize_agent",
@@ -52,10 +46,40 @@ __all__ = [
     "SleepWakeCycle",
     "DialogueTurn",
     "DialogueSession",
-    "VaultWatcher",
-    "AttentionAwareWatcher",
-    "FileActivity",
-    "FileActivityTracker",
-    "AttentionSlot",
-    "AttentionWindow",
 ]
+
+
+def VaultWatcher():
+    """Lazy import for VaultWatcher."""
+    from .watcher import VaultWatcher as _VW
+    return _VW
+
+
+def AttentionAwareWatcher():
+    """Lazy import for AttentionAwareWatcher."""
+    from .watcher import AttentionAwareWatcher as _AAW
+    return _AAW
+
+
+def FileActivity():
+    """Lazy import for FileActivity."""
+    from .activity import FileActivity as _FA
+    return _FA
+
+
+def FileActivityTracker():
+    """Lazy import for FileActivityTracker."""
+    from .activity import FileActivityTracker as _FAT
+    return _FAT
+
+
+def AttentionSlot():
+    """Lazy import for AttentionSlot."""
+    from .attention import AttentionSlot as _AS
+    return _AS
+
+
+def AttentionWindow():
+    """Lazy import for AttentionWindow."""
+    from .attention import AttentionWindow as _AW
+    return _AW
