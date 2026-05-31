@@ -61,10 +61,14 @@ class WorldFragment:
         if self.source_file:
             source_line = f"\nsource: {self.source_file}"
 
+        collision_line = ""
+        if self.collision_elements:
+            collision_line = f"\ncollision-elements: {', '.join(self.collision_elements)}"
+
         frontmatter = f"""---
 created: {created_str}
 type: world-fragment
-fit-path: {self.fit_path}{source_line}
+fit-path: {self.fit_path}{source_line}{collision_line}
 ---"""
 
         links_section = ""
