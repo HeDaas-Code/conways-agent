@@ -15,6 +15,7 @@ from typing import Optional
 
 from .world_fragment import WorldFragment
 from .vault import get_vault_path
+from .decay import MemoryDecay, get_decay_system
 
 
 class MemorySystem:
@@ -26,13 +27,19 @@ class MemorySystem:
     fragments and ensures bidirectional linking.
     """
 
-    def __init__(self, world_dir: Optional[Path] = None, enable_index: bool = True) -> None:
+    def __init__(
+        self,
+        world_dir: Optional[Path] = None,
+        enable_index: bool = True,
+        decay: Optional[MemoryDecay] = None,
+    ) -> None:
         """
         Initialize the memory system.
 
         Args:
             world_dir: Optional custom world directory. Defaults to vault/agent/world/.
             enable_index: Whether to update the memory index on write/update/delete.
+            decay: Optional MemoryDecay instance for freshness tracking.
         """
         if world_dir is None:
             vault_path = get_vault_path()
@@ -44,6 +51,13 @@ class MemorySystem:
 
         self._enable_index = enable_index and self._use_vault_index
         self._world_dir.mkdir(parents=True, exist_ok=True)
+        self._decay = decay
+
+    def _get_decay(self) -> Optional[MemoryDecay]:
+        """Get the decay system, initializing if needed."""
+        if self._decay is None:
+            self._decay = get_decay_system()
+        return self._decay
 
     def write_fragment(self, fragment: WorldFragment) -> Path:
         """
@@ -76,6 +90,11 @@ class MemorySystem:
         file_path.write_text(content, encoding="utf-8")
         self._update_memory_index(fragment, file_path)
 
+        # Record in decay system
+        if self._enable_index:
+            decay = self._get_decay()
+            decay.on_fragment_written(str(file_path.relative_to(get_vault_path())))
+
         return file_path
 
     def read_fragment(self, path: Path) -> WorldFragment:
@@ -96,7 +115,14 @@ class MemorySystem:
             raise FileNotFoundError(f"Fragment file not found: {path}")
 
         content = path.read_text(encoding="utf-8")
-        return self._parse_fragment_file(content, path)
+        fragment = self._parse_fragment_file(content, path)
+
+        # Record access in decay system
+        if self._enable_index:
+            decay = self._get_decay()
+            decay.on_fragment_read(str(path.relative_to(get_vault_path())))
+
+        return fragment
 
     def read_all_fragments(self) -> list[WorldFragment]:
         """
@@ -116,6 +142,25 @@ class MemorySystem:
 
         fragments.sort(key=lambda f: f.created_at)
         return fragments
+
+    def get_vivid_fragments(self, threshold: float = 0.5) -> list[Path]:
+        """
+        Get fragments above a freshness threshold (for retrieval).
+
+        This method uses the decay system to return only fragments
+        that are still "vivid" in memory.
+
+        Args:
+            threshold: Minimum freshness score (default 0.5)
+
+        Returns:
+            list[Path]: List of paths to vivid fragments
+        """
+        if not self._enable_index:
+            return list(self._world_dir.glob("*.md"))
+
+        decay = self._get_decay()
+        return decay.get_vivid_fragments(threshold)
 
     def get_fragment_by_title(self, title: str) -> WorldFragment | None:
         """

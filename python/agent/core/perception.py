@@ -14,6 +14,7 @@ from typing import Optional
 
 from .vault import get_vault_path, read_file
 from ..log import log_event
+from .decay import get_decay_system
 
 
 @dataclass
@@ -100,7 +101,11 @@ class PerceptionSystem:
         )
         
         self._add_to_history(perception)
-        
+
+        # Record in decay system
+        decay = get_decay_system()
+        decay.on_fragment_read(path)
+
         log_event(
             "perception",
             f"Perceived file: {path}",
