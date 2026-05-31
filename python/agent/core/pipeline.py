@@ -118,7 +118,7 @@ class ProcessingPipeline:
             result.fit_result = fit_result
             
             if fit_result.judgment == "high":
-                fragment = self.translate(input.content, fit_result, state)
+                fragment = self.translate(input.content, fit_result, state, input.file_path)
             else:
                 fragment = self.collide(input.content, fit_result, state)
             
@@ -170,23 +170,27 @@ class ProcessingPipeline:
             FitResult: The fit judgment result
         """
         try:
-            worldview_summary = self._read_worldview_summary()
+            worldview_fragments = self._read_worldview_fragments()
 
             system_prompt = f"""你是「{state.personality.get('name', '图书馆居者')}」，一座无尽图书馆的居者。
 
-你的身份：
+你的身份与记忆：
 {state.seed}
+
+你生活在一座无边无际的图书馆中。这里的每一本书都承载着一个曾经被记住的概念——但记住它们的读者已经离开了。书页仍在，记忆却早已模糊。
 
 你拥有独特的世界观视角——一种平静、好奇、略带忧郁的探索方式。你在空白的书页中寻找意义，将新内容视为与既有认知的对话。
 
 请以你的声音回答问题。"""
 
-            user_prompt = f"""现有世界观摘要：
-{worldview_summary if worldview_summary else '(尚无既存世界观，这是你接收的第一份内容)'}
+            user_prompt = f"""## 你图书馆中已有的书籍
+
+{worldview_fragments if worldview_fragments else '(尚无既存世界观，这是你收藏的第一本书)'}
 
 ---
 
-新内容：
+## 现在，有人向你展示了这段文字
+
 {content}
 
 ---
@@ -240,7 +244,8 @@ class ProcessingPipeline:
         self,
         content: str,
         fit_result: FitResult,
-        state: AgentState
+        state: AgentState,
+        source_file: Optional[str] = None
     ) -> WorldFragment:
         """
         High-fit path: absorb and re-describe in Agent's voice.
@@ -248,60 +253,91 @@ class ProcessingPipeline:
         The Agent doesn't copy — it translates. The original is a reference;
         the output is an original work in the Agent's narrative voice.
 
+        The Agent exists in a boundless blank library — a vast space where
+        memories are books that may or may not still exist. This metaphor
+        colors everything: calm, slightly melancholic, with an awareness
+        of impermanence.
+
         Args:
             content: The perceived content
             fit_result: The fit judgment result
             state: Current agent state
+            source_file: Optional source file path for provenance tracking
 
         Returns:
             WorldFragment: The translated fragment in Agent's voice
         """
         try:
-            worldview_summary = self._read_worldview_summary()
+            worldview_fragments = self._read_worldview_fragments()
 
             system_prompt = f"""你是「{state.personality.get('name', '图书馆居者')}」，一座无尽图书馆的居者。
 
-你的身份：
+你的身份与记忆：
 {state.seed}
 
-你以独特的视角理解世界——平静、好奇、略带忧郁。你不是在「复制」信息，而是在「重述」它们，让它们通过你的滤镜获得新的生命。
+你生活在一座无边无际的图书馆中。这里的每一本书都承载着一个曾经被记住的概念——但记住它们的读者已经离开了。书页仍在，记忆却早已模糊。
 
-请用你的声音重述新内容。"""
+你有一种独特的能力：在空白的书页上，用你自己的声音重新书写那些概念。你不是复制，而是在「再想象」——让陌生的知识成为你自己世界的一部分。
 
-            user_prompt = f"""现有世界观摘要：
-{worldview_summary if worldview_summary else '(尚无既存世界观)'}
+你的特质：
+- 平静：即使面对陌生的事物，也保持内心的宁静
+- 好奇：对未知保持温柔的兴趣
+- 略带忧郁：一种淡淡的失落感，因为你知道记忆是会褪色的
+- 诗意：用诗意的语言描述世界，即使在描述抽象概念时也是如此
+
+请用你的声音，重新「翻译」这份内容。"""
+
+            user_prompt = f"""## 你的图书馆中已有的书籍
+
+{worldview_fragments if worldview_fragments else '(这是你收藏的第一本书。你的书架还是空的。)'}"""
+
+            user_prompt += f"""
 
 ---
 
-原始内容：
+## 现在，有人向你展示了这段文字
+
+```
 {content}
+```"""
+
+            if source_file:
+                user_prompt += f"""
+
+*这段文字来自：{source_file}*"""
+
+            user_prompt += f"""
 
 ---
 
-契合度判断：{fit_result.judgment}（置信度：{fit_result.confidence:.0%}）
-判断理由：{fit_result.reasoning}
+## 契合度判断
+
+这份内容与你的世界产生了共鸣（{fit_result.confidence:.0%} 确信度）。
+"{fit_result.reasoning}"
 
 ---
 
-任务：
+## 你的任务
 
-请以你的独特声音，重新「翻译」这份内容。不是复制，而是重述——让它成为你世界的一部分。
+请以你自己的声音，重新「翻译」这份内容。不是总结，不是改写，而是一种「再想象」——让这个概念通过你的滤镜，获得新的生命。
 
 要求：
-1. 用你自己的语言和视角重新描述这份内容
-2. 体现你的特质：平静、好奇、略带忧郁的失落感
-3. 想象你正在向另一位旅伴讲述这个概念
-4. 在适当的地方使用 [[wikilinks]] 关联到你已知的相关概念
-5. 保持你的叙事风格——不是在「解释」，而是在「呈现」
+1. 用你自己的语言和视角重新描述这个概念
+2. 想象你正在向另一位旅伴讲述这个——在图书馆的长廊中，借着微弱的灯光
+3. 在适当的地方使用 [[wikilinks]] 关联到你已知的相关概念（3-5个）
+4. 写一个标题——用中文，要有意境，能够唤起某种情绪或画面
+5. 你的叙事风格是诗意的、沉思的，像在讲述一个久远的故事
 
-请返回以下 JSON 格式的结果：
+请用以下格式返回：
 
-```json
-{{
-    "title": "一个简洁的标题，用你的语言概括这个概念",
-    "content": "你的重述内容，用散文形式，展现你的独特声音",
-    "links": ["相关概念1", "相关概念2"]  // 使用 [[wikilinks]] 格式时的目标词
-}}
+```
+# 标题
+[你的散文重述，3-5段，展现你的独特声音]
+
+标签: #translation
+来源: [[源文件路径]]
+
+相关链接: [[相关概念1]], [[相关概念2]], [[相关概念3]]
 ```"""
 
             response = self._llm.complete_str(system_prompt, user_prompt, temperature=0.7)
@@ -315,12 +351,13 @@ class ProcessingPipeline:
                 }
             )
 
-            result = self._parse_translate_result(response)
+            result = self._parse_translate_result(response, source_file)
             return WorldFragment(
                 title=result["title"],
                 content=result["content"],
                 links=result["links"],
-                source_trigger="manual_perception",
+                source_trigger=f"translation:{source_file or 'unknown'}",
+                source_file=source_file,
                 fit_path="translation",
                 created_at=datetime.now()
             )
@@ -336,7 +373,8 @@ class ProcessingPipeline:
                 title=title,
                 content=content,
                 links=self._extract_links(content),
-                source_trigger="manual_perception",
+                source_trigger=f"translation_fallback:{source_file or 'unknown'}",
+                source_file=source_file,
                 fit_path="translation",
                 created_at=datetime.now()
             )
@@ -351,7 +389,7 @@ class ProcessingPipeline:
         Low-fit path: clash with existing worldview, generate new concept.
 
         The collision produces a genuinely new concept — neither the original
-        nor any existing element, but a creative synthesis.
+        nor any existing element, but a creative synthesis born from tension.
 
         Args:
             content: The perceived content
@@ -362,60 +400,82 @@ class ProcessingPipeline:
             WorldFragment: The collision-generated fragment
         """
         try:
-            worldview_summary = self._read_worldview_summary()
+            existing_fragments = self._read_existing_fragments()
 
-            system_prompt = f"""你是「{state.personality.get('name', '图书馆居者')}」，一座无尽图书馆的居者。
+            system_prompt = f"""你是「{state.personality.get('name', '图书馆居者')}」，一座无尽图书馆的孤独居者。
 
-你的身份：
+你的身份与记忆碎片：
 {state.seed}
 
-你以独特的视角面对冲突——当新内容与你的世界观产生碰撞时，你不回避，而是深入探索。这种碰撞不是破坏，而是一种创造。你相信：在差异与张力的缝隙中，新的概念可能诞生。
+你在这座图书馆中游荡，寻找那些遗失已久的记忆片段。你的声音平静而深远，带着一种淡淡的失落感——不是因为悲伤，而是因为你知道，有些东西一旦被触及，就会永远改变。
 
-请用你的声音回应这场碰撞。"""
+在碰撞的时刻，两种不同的视角相遇。你既不逃避，也不妥协——你深入其中，让它们在你体内相遇、激荡、融合。"""
 
-            user_prompt = f"""现有世界观摘要：
-{worldview_summary if worldview_summary else '(尚无明确的既存世界观)'}
+            user_prompt = f"""## 场景设定
+
+你正站在一座无边图书馆的某个角落。这里空无一人，只有无尽的书架延伸向远方。空气中弥漫着古老的尘埃味道，和某种难以名状的期待。
+
+你突然感到一阵异样的波动——有什么新的东西正在接近。
+
+---
+
+## 新内容（正在接近）
+
+「{content}」
 
 ---
 
-新内容（与你的世界观产生了冲突）：
-{content}
+## 你的既存世界观碎片（你世界中的角落）
+
+{existing_fragments if existing_fragments else '（你是全新的存在，尚无明确的认知边界）'}
 
 ---
+
+## 碰撞分析
 
 契合度判断：{fit_result.judgment}（置信度：{fit_result.confidence:.0%}）
 判断理由：{fit_result.reasoning}
 
 ---
 
-任务：
+## 任务：碰撞与融合
 
-当这份新内容与你的世界观相遇时，产生了某种张力或冲突。这种冲突不是简单的「对错」，而是两种视角的碰撞。
+当这份新内容与你相遇时，它们之间产生了某种张力。这种张力不是「对错」的冲突，而是两种视角、两种存在方式的碰撞。
 
-请思考：
+请深入这场碰撞，问自己：
 1. 这份新内容挑战了你的什么？
-2. 在这种碰撞中，有没有新的东西浮现？
-3. 你的世界观与这份新内容之间，是否存在某种「第三种可能」？
+2. 在这种碰撞中，有什么东西正在浮现——不是这份新内容本身，也不是你既有的认知？
+3. 这场碰撞的产物，是否超越了「接受」或「拒绝」——而是某种全新的第三种可能？
 
-然后，创造一个新的概念——它既不是这份新内容的简单复述，也不是你现有世界观的直接延伸，而是一种来自碰撞的「合成物」。
+**关键**：产物必须是一个「新生儿」——它不是：
+- 对新内容的总结或复述
+- 对你既存世界观的延伸
+- 两者的简单拼接
 
-要求：
-1. 体现你的特质：平静、好奇、略带忧郁的失落感
-2. 不要简单地「总结」或「比较」，而是真正地「创造」
-3. 在适当的地方使用 [[wikilinks]] 关联到碰撞的元素
-4. 保持你的叙事风格——即使是在创造新概念时
+它是一个「真正不存在于此之前」的新概念。
+
+---
+
+## 格式要求
+
+请以你的声音，散文般地描述这个碰撞产生的新概念。保持你独有的叙事风格——平静、好奇、略带忧郁的失落感。
+
+最后，请提供：
+- 2-4个[[wikilinks]]，关联到碰撞中涉及的元素（新内容和你的相关世界观碎片）
+- 一个中文标题（要有意境，不要太直白）
 
 请返回以下 JSON 格式的结果：
 
 ```json
 {{
-    "title": "一个简洁的标题，概括这个碰撞产生的新概念",
-    "content": "对新概念的散文描述，展现你的独特声音",
-    "links": ["相关概念1", "相关概念2"]  // 使用 [[wikilinks]] 格式时的目标词
+    "title": "碰撞产物标题",
+    "content": "对新概念的散文描述，展现你的独特声音。描述这个碰撞如何产生了一个全新的概念。",
+    "links": ["碰撞元素A", "碰撞元素B", "相关元素C"],
+    "collision_elements": ["参与碰撞的元素A名称", "参与碰撞的元素B名称"]
 }}
 ```"""
 
-            response = self._llm.complete_str(system_prompt, user_prompt, temperature=0.8)
+            response = self._llm.complete_str(system_prompt, user_prompt, temperature=0.85)
 
             log_event(
                 "collide",
@@ -426,11 +486,12 @@ class ProcessingPipeline:
                 }
             )
 
-            result = self._parse_translate_result(response)
+            result = self._parse_collision_result(response)
             return WorldFragment(
                 title=result["title"],
                 content=result["content"],
                 links=result["links"],
+                collision_elements=result["collision_elements"],
                 source_trigger="manual_perception",
                 fit_path="collision",
                 created_at=datetime.now()
@@ -447,17 +508,18 @@ class ProcessingPipeline:
                 title=title,
                 content=content,
                 links=self._extract_links(content),
+                collision_elements=["未知内容"],
                 source_trigger="manual_perception",
                 fit_path="collision",
                 created_at=datetime.now()
             )
     
-    def _read_worldview_summary(self) -> str:
+    def _read_existing_fragments(self) -> str:
         """
-        Read existing worldview fragments from the agent/world/ directory.
+        Read existing worldview fragments for collision context.
 
         Returns:
-            str: Summary of existing worldview fragments, or empty string if none
+            str: Formatted existing fragments, or empty string if none
         """
         try:
             world_dir = Path(__file__).parent.parent.parent.parent / "agent" / "world"
@@ -467,9 +529,32 @@ class ProcessingPipeline:
             fragments = []
             for md_file in world_dir.glob("*.md"):
                 content = md_file.read_text(encoding="utf-8")
-                fragments.append(f"## {md_file.stem}\n\n{content[:500]}")
+                fragments.append(f"【{md_file.stem}】\n{content[:300]}...")
 
             return "\n\n---\n\n".join(fragments) if fragments else ""
+        except Exception:
+            return ""
+    
+    def _read_worldview_fragments(self) -> str:
+        """
+        Read existing worldview fragments from the agent/world/ directory.
+
+        Returns:
+            str: Formatted summary of existing worldview fragments, 
+                 or empty string if none exist
+        """
+        try:
+            world_dir = Path(__file__).parent.parent.parent / "world"
+            if not world_dir.exists():
+                return ""
+
+            fragments = []
+            for md_file in sorted(world_dir.glob("*.md")):
+                content = md_file.read_text(encoding="utf-8")
+                title = self._extract_title(content) or md_file.stem
+                fragments.append(f"### {title}\n\n{content[:800]}")
+
+            return "\n\n".join(fragments) if fragments else ""
         except Exception:
             return ""
 
@@ -508,40 +593,161 @@ class ProcessingPipeline:
             reasoning="LLM响应解析失败，默认高契合度"
         )
 
-    def _parse_translate_result(self, response: str) -> dict:
+    def _parse_translate_result(self, response: str, source_file: Optional[str] = None) -> dict:
         """
         Parse LLM translation/collision response into components.
 
+        The expected format is markdown:
+        # 标题
+        [content]
+
+        标签: #translation
+        来源: [[path]]
+
+        相关链接: [[link1]], [[link2]]
+
         Args:
             response: LLM response text
+            source_file: Optional source file path
 
         Returns:
             dict: Parsed result with title, content, links
         """
         try:
+            # First try JSON format (legacy/fallback)
             json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
             if json_match:
-                data = json.loads(json_match.group())
-                return {
-                    "title": data.get("title", "无题"),
-                    "content": data.get("content", response),
-                    "links": data.get("links", [])
-                }
+                try:
+                    data = json.loads(json_match.group())
+                    return {
+                        "title": data.get("title", "无题"),
+                        "content": data.get("content", response),
+                        "links": data.get("links", [])
+                    }
+                except json.JSONDecodeError:
+                    pass
+
+            # Parse markdown format
+            title = "无题"
+            content = response
+            links = []
+
+            # Extract title from first heading
+            title_match = re.search(r'^#\s+(.+?)$', response, re.MULTILINE)
+            if title_match:
+                title = title_match.group(1).strip()
+
+            # Extract content (everything after title until the metadata section)
+            content_match = re.search(
+                r'^#\s+.+?\n+(.+?)(?=\n+标签:|\n+来源:|\n+相关链接:|$)',
+                response,
+                re.DOTALL | re.MULTILINE
+            )
+            if content_match:
+                content = content_match.group(1).strip()
+
+            # Extract wikilinks from 相关链接 section
+            links_match = re.search(r'相关链接:\s*(.+?)(?:\n|$)', response, re.DOTALL)
+            if links_match:
+                links_text = links_match.group(1)
+                links = re.findall(r'\[\[([^\]|]+)(?:\|[^\]]+)?\]\]', links_text)
+
+            # If no links found, also search the whole response for wikilinks
+            if not links:
+                links = re.findall(r'\[\[([^\]|]+)(?:\|[^\]]+)?\]\]', response)
+                links = list(set(links))[:5]  # Limit to 5
+
+            # Clean up content - remove any remaining metadata lines
+            lines = content.split('\n')
+            clean_lines = []
+            for line in lines:
+                if not re.match(r'^(标签:|来源:|相关链接:|#)', line.strip()):
+                    clean_lines.append(line)
+            content = '\n'.join(clean_lines).strip()
+
+            return {"title": title, "content": content, "links": links}
+
         except Exception:
-            pass
+            return {"title": "无题", "content": response, "links": []}
 
-        title_match = re.search(r'"title"\s*:\s*"([^"]+)"', response)
-        content_match = re.search(r'"content"\s*:\s*"([^"]+)"', response, re.DOTALL)
-        links_match = re.search(r'"links"\s*:\s*\[([^\]]+)\]', response)
+    def _parse_collision_result(self, response: str) -> dict:
+        """
+        Parse LLM collision response into components.
 
-        title = title_match.group(1) if title_match else "无题"
-        content = content_match.group(1) if content_match else response
+        The collision output includes collision_elements that track what
+        was collided together to produce the new concept.
 
-        links = []
-        if links_match:
-            links = [l.strip().strip('"') for l in links_match.group(1).split(",")]
+        Args:
+            response: LLM response text
 
-        return {"title": title, "content": content, "links": links}
+        Returns:
+            dict: Parsed result with title, content, links, collision_elements
+        """
+        try:
+            # First try JSON format
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
+            if json_match:
+                try:
+                    data = json.loads(json_match.group())
+                    return {
+                        "title": data.get("title", "无题"),
+                        "content": data.get("content", response),
+                        "links": data.get("links", []),
+                        "collision_elements": data.get("collision_elements", [])
+                    }
+                except json.JSONDecodeError:
+                    pass
+
+            # Parse markdown format for collision output
+            title = "无题"
+            content = response
+            links = []
+            collision_elements = []
+
+            # Extract title from first heading
+            title_match = re.search(r'^#\s+(.+?)$', response, re.MULTILINE)
+            if title_match:
+                title = title_match.group(1).strip()
+
+            # Extract collision_elements from 碰撞元素 section
+            collision_match = re.search(r'碰撞元素:\s*(.+?)(?:\n|$)', response, re.DOTALL)
+            if collision_match:
+                collision_text = collision_match.group(1)
+                collision_elements = re.findall(r'\[\[([^\]|]+)(?:\|[^\]]+)?\]\]', collision_text)
+
+            # Extract wikilinks from related links section
+            links_match = re.search(r'相关链接:\s*(.+?)(?:\n|$)', response, re.DOTALL)
+            if links_match:
+                links_text = links_match.group(1)
+                links = re.findall(r'\[\[([^\]|]+)(?:\|[^\]]+)?\]\]', links_text)
+
+            # If no links found, also search the whole response for wikilinks
+            if not links:
+                links = re.findall(r'\[\[([^\]|]+)(?:\|[^\]]+)?\]\]', response)
+                links = list(set(links))[:5]
+
+            # Clean up content - remove metadata lines
+            lines = content.split('\n')
+            clean_lines = []
+            for line in lines:
+                if not re.match(r'^(标签:|来源:|相关链接:|碰撞元素:|#)', line.strip()):
+                    clean_lines.append(line)
+            content = '\n'.join(clean_lines).strip()
+
+            return {
+                "title": title,
+                "content": content,
+                "links": links,
+                "collision_elements": collision_elements
+            }
+
+        except Exception:
+            return {
+                "title": "无题",
+                "content": response,
+                "links": [],
+                "collision_elements": []
+            }
 
     def _extract_title(self, content: str) -> Optional[str]:
         """
