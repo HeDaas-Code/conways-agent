@@ -1,2 +1,32 @@
+# Original
 .MaiBot/
 文档/obsilo/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Node.js
+node_modules/
+dist/
+
+# Agent vault (运行时生成)
+agent/goals/*
+agent/world/*
+!agent/goals/.gitkeep
+!agent/world/.gitkeep
+agent/memory-index.json
+
+# Obsidian
+!.obsidian/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
