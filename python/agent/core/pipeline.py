@@ -22,6 +22,7 @@ from .state import AgentState
 from .world_fragment import WorldFragment
 from .perception import PerceptionInput
 from .consistency import ConsistencyCheck, ConsistencyEngine
+from .resolution import ConflictResolver, ConflictResolution
 from ..log import log_event
 
 
@@ -59,6 +60,9 @@ class ProcessingResult:
         consistency_check: The consistency check result
         processing_time_ms: How long processing took
         errors: Any errors that occurred
+        status: Processing status ("success", "abandoned", "failed")
+        reason: Reason for non-success (e.g., abandonment reason)
+        resolution: Conflict resolution info if conflicts were found
     """
 
     success: bool
@@ -69,6 +73,9 @@ class ProcessingResult:
     errors: list[str] = field(default_factory=list)
     started_at: datetime = field(default_factory=datetime.now)
     completed_at: Optional[datetime] = None
+    status: str = "success"  # "success" | "abandoned" | "failed"
+    reason: str = ""  # Reason for abandonment or failure
+    resolution: Optional[ConflictResolution] = None
     
     def mark_complete(self) -> None:
         """Mark processing as complete and record elapsed time."""
@@ -101,6 +108,7 @@ class ProcessingPipeline:
         """
         self._fragments_created: list[WorldFragment] = []
         self._llm = llm_client or LLMClient()
+        self._consistency_engine = ConsistencyEngine(self._llm)
     
     def process(self, input: PerceptionInput) -> ProcessingResult:
         """
@@ -124,10 +132,41 @@ class ProcessingPipeline:
                 fragment = self.translate(input.content, fit_result, state, input.file_path)
             else:
                 fragment = self.collide(input.content, fit_result, state)
-            
+
             fragment.source_trigger = f"{input.trigger_type}:{input.file_path}"
             result.fragment = fragment
-            
+
+            check = self._consistency_engine.check(fragment)
+            result.consistency_check = check
+
+            if not check.is_consistent:
+                log_event(
+                    "consistency_conflict",
+                    f"Conflicts detected for '{fragment.title}'",
+                    {
+                        "fragment_title": fragment.title,
+                        "num_conflicts": len(check.conflicts),
+                        "warnings": check.warnings
+                    }
+                )
+
+                resolution = self._consistency_engine.resolve_conflict(check, fragment)
+                if resolution.success and resolution.adjusted_fragment:
+                    result.fragment = resolution.adjusted_fragment
+                    fragment = result.fragment
+
+                    log_event(
+                        "consistency_resolved",
+                        f"Conflicts resolved for '{fragment.title}'",
+                        {"resolution_method": resolution.resolution_method}
+                    )
+            elif check.warnings:
+                log_event(
+                    "consistency_warning",
+                    f"Consistency check completed with warnings",
+                    {"warnings": check.warnings}
+                )
+
             self._fragments_created.append(fragment)
             result.success = True
             
@@ -140,6 +179,8 @@ class ProcessingPipeline:
                     "fit_confidence": fit_result.confidence,
                     "fit_path": fragment.fit_path,
                     "fragment_title": fragment.title,
+                    "consistency_status": "consistent" if check.is_consistent else "conflicts_detected",
+                    "consistency_warnings": check.warnings
                 }
             )
             
@@ -805,4 +846,4 @@ class ProcessingPipeline:
         return self._fragments_created.copy()
 
 
-__all__ = ["ProcessingPipeline", "FitResult", "ProcessingResult"]
+__all__ = ["ProcessingPipeline", "FitResult", "ProcessingResult", "ConsistencyCheck"]
