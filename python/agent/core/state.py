@@ -16,6 +16,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Import mode from mode_machine to avoid circular import
+# The mode field stores the current operational mode
+
 
 @dataclass
 class AgentState:
@@ -34,6 +37,7 @@ class AgentState:
         wake_duration_seconds: How long to stay awake (default 300 = 5 min)
         sleep_duration_seconds: How long to sleep (default 3600 = 1 hour)
         total_cycles: Total number of cognitive cycles
+        mode: Current operational mode (idle/interaction/self)
     """
     
     seed: str = ""
@@ -58,6 +62,7 @@ class AgentState:
     wake_duration_seconds: int = 300
     sleep_duration_seconds: int = 3600
     total_cycles: int = 0
+    mode: str = "idle"  # Current operational mode: idle, interaction, self
     
     def __post_init__(self) -> None:
         """Validate state values after initialization."""
