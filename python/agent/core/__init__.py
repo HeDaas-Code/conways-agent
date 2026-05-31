@@ -11,6 +11,10 @@ Provides core agent functionality including:
 - LLM integration
 - Consistency constraint engine
 - Sleep/wake cycle management
+- Dialogue system
+- Vault file watcher with debouncing
+- File activity tracking
+- Attention window for bounded perception
 """
 
 from .startup import initialize_agent, get_current_state, startup_message
@@ -23,7 +27,9 @@ from .consistency import ConsistencyEngine, ConsistencyCheck, Conflict, Conflict
 from .memory import MemorySystem
 from .cycle import SleepWakeCycle
 from .dialogue import DialogueTurn, DialogueSession
-from .watcher import FileEvent, VaultWatcher
+from .watcher import VaultWatcher, AttentionAwareWatcher
+from .activity import FileActivity, FileActivityTracker
+from .attention import AttentionSlot, AttentionWindow
 
 __all__ = [
     "initialize_agent",
@@ -46,6 +52,10 @@ __all__ = [
     "SleepWakeCycle",
     "DialogueTurn",
     "DialogueSession",
-    "FileEvent",
     "VaultWatcher",
+    "AttentionAwareWatcher",
+    "FileActivity",
+    "FileActivityTracker",
+    "AttentionSlot",
+    "AttentionWindow",
 ]
