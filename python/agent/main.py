@@ -63,6 +63,19 @@ def run_dialogue_mode() -> None:
     run_interactive_loop(session)
 
 
+def run_deep_terminal_mode() -> None:
+    """Run the Agent in deep terminal mode."""
+    print("正在启动深度终端界面...")
+    ensure_vault_dirs()
+
+    state = initialize_agent()
+    print(startup_message(state))
+
+    from agent.ui.deep_terminal import DeepTerminalCLI
+    cli = DeepTerminalCLI()
+    cli.run()
+
+
 def run_interactive_loop(session: DialogueSession) -> None:
     """The interactive input loop for dialogue."""
     while True:
@@ -347,6 +360,9 @@ Examples:
   python -m agent.main --perceive notes/1.md notes/2.md  # Perceive multiple files
   python -m agent.main --perceive-all                     # Perceive all vault files
   python -m agent.main --daemon                           # Daemon mode with sleep/wake cycle
+  python -m agent.main --deep                             # Deep terminal UI with behavior monitoring
+  python -m agent.main --ui deep                          # Same as --deep
+  python -m agent.ui.deep_terminal                        # Run deep terminal directly
         """
     )
     
@@ -370,18 +386,36 @@ Examples:
     )
 
     parser.add_argument(
+        "--deep",
+        action="store_true",
+        help="Run with deep terminal UI (same as --ui deep)"
+    )
+
+    parser.add_argument(
         "--dialogue",
         action="store_true",
         help="Run in dialogue mode (default interactive mode)"
     )
 
+    parser.add_argument(
+        "--ui",
+        choices=["simple", "deep"],
+        default="simple",
+        help="UI mode: simple (dialogue) or deep (full TUI with behavior monitoring)"
+    )
+
     args = parser.parse_args()
+
+    if args.deep:
+        args.ui = "deep"
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
     try:
-        if args.dialogue:
+        if args.ui == "deep":
+            run_deep_terminal_mode()
+        elif args.dialogue:
             run_dialogue_mode()
         elif args.daemon:
             run_daemon_mode()

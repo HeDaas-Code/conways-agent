@@ -399,7 +399,10 @@ class Scheduler:
 
         Called at the start of each tick.
         """
-        self.state.weights = self.weights
+        # Keep state.weights in sync with self.weights for consistent reads
+        # but don't overwrite if they reference the same object already
+        if self.state.weights is not self.weights:
+            self.state.weights = self.weights
 
     def calculate_priority_score(self) -> tuple[float, dict[str, float]]:
         """
@@ -503,8 +506,9 @@ class Scheduler:
 
     def reset_weights(self) -> None:
         """Reset all weights to baseline (1.0)."""
-        self.state.weights = DriverWeights()
-        self.weights = self.state.weights
+        new_weights = DriverWeights()
+        self.state.weights = new_weights
+        self.weights = new_weights
 
     def record_action(self, action: str) -> None:
         """
