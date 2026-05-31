@@ -1,4 +1,4 @@
-import { Plugin, WorkspaceLeaf, TFile } from 'obsidian';
+import { Plugin, WorkspaceLeaf } from 'obsidian';
 import { AgentSidebar } from './sidebar';
 
 export default class ConwaysAgentPlugin extends Plugin {
@@ -26,12 +26,7 @@ export default class ConwaysAgentPlugin extends Plugin {
       })
     );
 
-    setTimeout(() => {
-      if (this.statusBar) {
-        this.statusBar.setText('Agent: 清醒');
-      }
-    }, 1000);
-
+    // Initialize WS connection at plugin load
     this.injectStyles();
   }
 
@@ -51,19 +46,11 @@ export default class ConwaysAgentPlugin extends Plugin {
       return;
     }
 
-    const container = this.sidebarLeaf.containerEl;
+    const container = (this.sidebarLeaf as unknown as { containerEl: HTMLElement }).containerEl;
     container.empty();
 
     this.sidebar = new AgentSidebar(container, this);
     this.sidebar.render();
-
-    this.sidebarLeaf.on('unload', () => {
-      if (this.sidebar) {
-        this.sidebar.onUnload();
-        this.sidebar = null;
-      }
-      this.sidebarLeaf = null;
-    });
   }
 
   private updateStatusBar(): void {
@@ -227,14 +214,15 @@ export default class ConwaysAgentPlugin extends Plugin {
   }
 
   onunload(): void {
-    if (this.sidebar) {
-      this.sidebar.onUnload();
-      this.sidebar = null;
-    }
-
+    // Close sidebar and disconnect WebSocket
     if (this.sidebarLeaf) {
       this.sidebarLeaf.detach();
       this.sidebarLeaf = null;
+    }
+
+    if (this.sidebar) {
+      this.sidebar.onUnload();
+      this.sidebar = null;
     }
 
     const style = document.getElementById('conways-agent-styles');
