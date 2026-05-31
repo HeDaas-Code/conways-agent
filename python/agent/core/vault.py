@@ -220,6 +220,17 @@ def get_memory_index_path() -> Path:
     return vault_path / "agent" / "memory-index.json"
 
 
+def get_state_path() -> Path:
+    """
+    Get the path to the agent state file.
+    
+    Returns:
+        Path: Path to agent/state.json
+    """
+    vault_path = get_vault_path()
+    return vault_path / "agent" / "state.json"
+
+
 def load_memory_index() -> dict:
     """
     Load the memory index from file.
@@ -273,7 +284,7 @@ def _default_memory_index() -> dict:
     }
 
 
-def __all__ = [
+__all__ = [
     "get_vault_path",
     "read_seed",
     "read_personality",

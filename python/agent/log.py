@@ -24,7 +24,7 @@ def _get_logs_dir() -> Path:
     Returns:
         Path: Path to agent/logs/
     """
-    from .core.vault import get_vault_path
+    from agent.core.vault import get_vault_path
     logs_dir = get_vault_path() / "agent" / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     return logs_dir

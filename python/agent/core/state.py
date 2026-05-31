@@ -78,7 +78,7 @@ class AgentState:
             ValueError: If state file is invalid
         """
         if state_path is None:
-            from .vault import get_state_path
+            from agent.core.vault import get_state_path
             state_path = get_state_path()
         
         if not state_path.exists():
@@ -100,7 +100,7 @@ class AgentState:
             state_path: Path to state.json, defaults to agent/state.json
         """
         if state_path is None:
-            from .vault import get_state_path
+            from agent.core.vault import get_state_path
             state_path = get_state_path()
         
         state_path.parent.mkdir(parents=True, exist_ok=True)

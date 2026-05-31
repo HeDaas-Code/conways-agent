@@ -15,14 +15,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from .state import AgentState
-from .core.vault import (
+from .vault import (
     read_seed,
     read_personality,
     ensure_vault_dirs,
     load_memory_index,
     save_memory_index,
+    get_state_path,
 )
-from .log import log_startup
+from ..log import log_startup
 
 
 def initialize_agent() -> AgentState:
@@ -68,7 +69,7 @@ def get_current_state() -> Optional[AgentState]:
     Returns:
         Optional[AgentState]: Current state or None if not initialized
     """
-    from .core.vault import get_state_path
+    from .vault import get_state_path
     
     state_path = get_state_path()
     if not state_path.exists():
