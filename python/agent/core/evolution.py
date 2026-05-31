@@ -8,7 +8,7 @@ Agents can modify their own processing parameters while protecting core identity
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Any
@@ -23,8 +23,8 @@ class ProtectedParameters:
     """
     
     PROTECTED: set[str] = {
-        "seed",           # The founding seed — who the Agent is
-        "core_identity",  # Core identity markers
+        "seed",
+        "core_identity",
     }
     
     @classmethod
@@ -105,7 +105,6 @@ class EvolutionSystem:
         evolution.modify_parameter("curiosity_level", 0.6, "Too high")
     """
     
-    # Maximum allowed change per review (as a fraction, 0.2 = 20%)
     MAX_CHANGE_RATE: float = 0.20
     
     def __init__(self, state_path: Optional[Path] = None):
@@ -154,11 +153,6 @@ class EvolutionSystem:
         """
         Apply insights from a review to modify parameters.
         
-        Analyzes review results and adjusts parameters accordingly:
-        - If curiosity too high → lower it
-        - If fit_threshold miscalibrated → adjust
-        - If attention window too small → expand
-        
         Args:
             review: Dictionary containing review insights with keys like:
                 - curiosity_assessment: "too_high" | "too_low" | "balanced"
@@ -176,12 +170,11 @@ class EvolutionSystem:
         modified: list[str] = []
         review_id = review.get("review_id", datetime.now().strftime("%Y-%m-%d-review"))
         
-        # Process curiosity level
         curiosity_assessment = review.get("curiosity_assessment", "balanced")
         if curiosity_assessment == "too_high":
             new_value = self._calculate_gradual_change(
                 state.curiosity_level,
-                state.curiosity_level * 0.85,  # Reduce by ~15%
+                state.curiosity_level * 0.85,
                 "curiosity_level"
             )
             if self.modify_parameter("curiosity_level", new_value, 
@@ -190,19 +183,18 @@ class EvolutionSystem:
         elif curiosity_assessment == "too_low":
             new_value = self._calculate_gradual_change(
                 state.curiosity_level,
-                state.curiosity_level * 1.15,  # Increase by ~15%
+                state.curiosity_level * 1.15,
                 "curiosity_level"
             )
             if self.modify_parameter("curiosity_level", new_value,
                                      "Review showed curiosity too low", review_id):
                 modified.append("curiosity_level")
         
-        # Process fit_threshold
         fit_assessment = review.get("fit_threshold_assessment", "balanced")
         if fit_assessment == "too_strict":
             new_value = self._calculate_gradual_change(
                 state.fit_threshold,
-                state.fit_threshold * 1.15,  # More accepting
+                state.fit_threshold * 1.15,
                 "fit_threshold"
             )
             if self.modify_parameter("fit_threshold", new_value,
@@ -211,19 +203,18 @@ class EvolutionSystem:
         elif fit_assessment == "too_lenient":
             new_value = self._calculate_gradual_change(
                 state.fit_threshold,
-                state.fit_threshold * 0.85,  # More selective
+                state.fit_threshold * 0.85,
                 "fit_threshold"
             )
             if self.modify_parameter("fit_threshold", new_value,
                                      "Review showed threshold too lenient", review_id):
                 modified.append("fit_threshold")
         
-        # Process attention_window_size
         attention_assessment = review.get("attention_assessment", "balanced")
         if attention_assessment == "too_small":
             new_value = self._calculate_gradual_change(
                 float(state.attention_window_size),
-                float(state.attention_window_size) * 1.20,  # Expand by 20%
+                float(state.attention_window_size) * 1.20,
                 "attention_window_size"
             )
             if self.modify_parameter("attention_window_size", int(new_value),
@@ -232,7 +223,7 @@ class EvolutionSystem:
         elif attention_assessment == "too_large":
             new_value = self._calculate_gradual_change(
                 float(state.attention_window_size),
-                float(state.attention_window_size) * 0.80,  # Contract by 20%
+                float(state.attention_window_size) * 0.80,
                 "attention_window_size"
             )
             if self.modify_parameter("attention_window_size", int(new_value),
@@ -263,7 +254,6 @@ class EvolutionSystem:
         
         change_ratio = target_value / current_value
         
-        # Clamp change to max rate (±20%)
         if change_ratio > (1 + self.MAX_CHANGE_RATE):
             change_ratio = 1 + self.MAX_CHANGE_RATE
         elif change_ratio < (1 - self.MAX_CHANGE_RATE):
@@ -271,11 +261,9 @@ class EvolutionSystem:
         
         new_value = current_value * change_ratio
         
-        # Apply parameter-specific bounds
         if param_name == "curiosity_level" or param_name == "fit_threshold":
             new_value = max(0.0, min(1.0, new_value))
         elif param_name == "attention_window_size":
-            # Round to nearest integer for attention window
             new_value = max(1, min(20, round(new_value)))
         
         return new_value
@@ -314,7 +302,6 @@ class EvolutionSystem:
         
         old_value = getattr(state, name)
         
-        # Record the modification
         modification = ParameterModification(
             modified_at=datetime.now().isoformat(),
             parameter=name,
@@ -326,19 +313,13 @@ class EvolutionSystem:
         self._modifications.append(modification)
         self._save_history()
         
-        # Apply to state
         state.update(**{name: value})
         state.save(self._state_path)
         
         return True
     
     def get_modification_history(self) -> list[dict]:
-        """
-        Get history of parameter modifications.
-        
-        Returns:
-            list[dict]: List of modification records as dictionaries
-        """
+        """Get history of parameter modifications."""
         return [m.to_dict() for m in self._modifications]
     
     def rollback_parameter(self, name: str) -> bool:
@@ -354,7 +335,6 @@ class EvolutionSystem:
         Returns:
             bool: True if rollback was successful, False if no history found
         """
-        # Find the most recent modification of this parameter
         for mod in reversed(self._modifications):
             if mod.parameter == name:
                 from .state import AgentState
@@ -362,12 +342,10 @@ class EvolutionSystem:
                 state = AgentState.load(self._state_path)
                 current_value = getattr(state, name, None)
                 
-                # Only rollback if value has actually changed
                 if current_value != mod.old_value:
                     state.update(**{name: mod.old_value})
                     state.save(self._state_path)
                     
-                    # Record the rollback
                     rollback_mod = ParameterModification(
                         modified_at=datetime.now().isoformat(),
                         parameter=name,
@@ -380,7 +358,7 @@ class EvolutionSystem:
                     
                     return True
                 
-                return True  # Already at old value
+                return True
         
         return False
     
@@ -437,7 +415,6 @@ class EvolutionSystem:
         except FileNotFoundError:
             return suggestions
         
-        # Curiosity suggestions
         curiosity_assessment = review.get("curiosity_assessment", "balanced")
         if curiosity_assessment in ("too_high", "too_low"):
             direction = -1 if curiosity_assessment == "too_high" else 1
@@ -453,7 +430,6 @@ class EvolutionSystem:
                 "reason": f"Review assessment: curiosity {curiosity_assessment}",
             })
         
-        # Fit threshold suggestions
         fit_assessment = review.get("fit_threshold_assessment", "balanced")
         if fit_assessment in ("too_strict", "too_lenient"):
             direction = 1 if fit_assessment == "too_strict" else -1
@@ -469,7 +445,6 @@ class EvolutionSystem:
                 "reason": f"Review assessment: fit_threshold {fit_assessment}",
             })
         
-        # Attention window suggestions
         attention_assessment = review.get("attention_assessment", "balanced")
         if attention_assessment in ("too_small", "too_large"):
             direction = 1 if attention_assessment == "too_small" else -1
@@ -488,4 +463,33 @@ class EvolutionSystem:
         return suggestions
 
 
-__all__ = ["EvolutionSystem", "ProtectedParameters", "ParameterModification"]
+class PersonalitySnapshot:
+    """Snapshot of personality state at a point in time."""
+    captured_at: datetime
+    curiosity_level: float
+    fit_threshold: float
+    attention_window_size: int
+    active_goals_count: int
+    world_corpus_size: int
+    processing_patterns: list
+    notes: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "captured_at": self.captured_at.isoformat(),
+            "curiosity_level": self.curiosity_level,
+            "fit_threshold": self.fit_threshold,
+            "attention_window_size": self.attention_window_size,
+            "active_goals_count": self.active_goals_count,
+            "world_corpus_size": self.world_corpus_size,
+            "processing_patterns": self.processing_patterns,
+            "notes": self.notes,
+        }
+
+
+__all__ = [
+    "EvolutionSystem",
+    "ProtectedParameters",
+    "ParameterModification",
+    "PersonalitySnapshot",
+]
