@@ -70,6 +70,7 @@ class TestSubGoalParsing:
 
         assert len(sub_goals) == 3
         assert sub_goals[0][0] == "Research Phase"
+        assert sub_goals[0][1] == "Gather relevant information"
         assert sub_goals[1][0] == "Design Phase"
         assert sub_goals[2][0] == "Execution Phase"
 
@@ -115,8 +116,7 @@ class TestGoalDecomposition:
 子目标3：验证阶段 — 确认结果正确"""
         )
 
-        with patch.object(goal_system, 'llm_client', mock_llm):
-            sub_goals = goal_system.decompose_goal("测试父目标", mock_llm)
+        sub_goals = goal_system.decompose_goal("测试父目标", mock_llm)
 
         assert len(sub_goals) == 3
         assert all(g.parent == "测试父目标" for g in sub_goals)
@@ -134,7 +134,8 @@ class TestGoalDecomposition:
         sub_goals = goal_system.decompose_goal("父目标", mock_llm)
 
         for sub_goal in sub_goals:
-            assert sub_goal.status == "planned"
+            re_fetched = goal_system.get_goal(sub_goal.title)
+            assert re_fetched.status == "planned"
 
     def test_decompose_goal_logs_action(self, goal_system):
         """Test that decomposition is logged in parent's execution log."""
@@ -159,18 +160,15 @@ class TestGoalDecomposition:
         sub_goals = goal_system.decompose_goal("不存在的目标", mock_llm)
         assert sub_goals == []
 
-    def test_decompose_goal_with_no_llm_client(self, goal_system):
-        """Test that decompose_goal works without explicit LLM client."""
-        goal_system.create_goal(title="无客户端测试")
+    def test_decompose_goal_with_explicit_llm_client(self, goal_system):
+        """Test that decompose_goal works with explicit LLM client."""
+        goal_system.create_goal(title="显式客户端测试")
 
-        with patch('agent.core.goals.LLMClient') as MockLLM:
-            mock_instance = MagicMock()
-            mock_instance.complete_str.return_value = "子目标1：测试 — 测试描述"
-            MockLLM.return_value = mock_instance
+        mock_llm = MockLLMClient(response="子目标1：测试 — 测试描述")
 
-            goal_system.decompose_goal("无客户端测试")
-
-            MockLLM.assert_called_once()
+        sub_goals = goal_system.decompose_goal("显式客户端测试", mock_llm)
+        assert len(sub_goals) == 1
+        assert mock_llm.call_count == 1
 
 
 class TestChildCompletion:
