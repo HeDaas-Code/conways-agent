@@ -59,8 +59,9 @@ class LLMClient:
             messages=messages,
             **kwargs
         )
+        content = response["choices"][0]["message"]["content"]
         return LLMResponse(
-            content=response["choices"][0]["message"]["content"],
+            content=content.strip() if content else content,
             model=self.model,
             usage=response.get("usage", {})
         )
