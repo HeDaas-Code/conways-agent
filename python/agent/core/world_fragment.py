@@ -45,29 +45,56 @@ class WorldFragment:
         if self.fit_path not in ("translation", "collision"):
             self.fit_path = "translation"
     
-    def to_markdown(self) -> str:
+    def to_markdown(self, backlinks: list[str] | None = None) -> str:
         """
-        Convert fragment to markdown format.
-        
+        Convert fragment to Obsidian markdown format with YAML frontmatter.
+
+        Args:
+            backlinks: Optional list of fragment titles that link to this fragment.
+
         Returns:
-            str: Markdown representation of the fragment
+            str: Obsidian markdown representation of the fragment
         """
+        created_str = self.created_at.isoformat()
+
+        source_line = ""
+        if self.source_file:
+            source_line = f"\nsource: {self.source_file}"
+
+        frontmatter = f"""---
+created: {created_str}
+type: world-fragment
+fit-path: {self.fit_path}{source_line}
+---"""
+
         links_section = ""
         if self.links:
-            links_section = "\n\n**Related:** " + " | ".join(f"[[{link}]]" for link in self.links)
-        
+            links_list = ", ".join(f"[[{link}]]" for link in self.links)
+            links_section = f"\n\n相关链接: {links_list}"
+
         collision_section = ""
         if self.fit_path == "collision" and self.collision_elements:
             elements_str = " × ".join(f"[[{elem}]]" for elem in self.collision_elements)
             collision_section = f"\n\n**碰撞元素:** {elements_str}"
-        
-        return f"""# {self.title}
 
-{self.content}
+        content_lines = self.content.strip().split("\n")
+        quoted_content = "\n".join(f"> {line}" if line.strip() else ">" for line in content_lines)
 
----
-*Source: {self.source_trigger} | Path: {self.fit_path} | Created: {self.created_at.isoformat()}*{links_section}{collision_section}
-"""
+        tag_line = f"\n\n标签: #{self.fit_path}"
+
+        backlinks_section = ""
+        if backlinks:
+            bl_items = []
+            for bl in backlinks:
+                bl_items.append(f"- [[{bl}]]")
+            backlink_list = "\n".join(bl_items)
+            backlinks_section = f"\n\n---\n\n*被以下内容引用：*\n{backlink_list}"
+
+        return f"""{frontmatter}
+
+# {self.title}
+
+{quoted_content}{links_section}{tag_line}{collision_section}{backlinks_section}"""
     
     def to_dict(self) -> dict:
         """

@@ -21,7 +21,8 @@ from .llm import LLMClient
 from .state import AgentState
 from .world_fragment import WorldFragment
 from .perception import PerceptionInput
-from .consistency import ConsistencyCheck, ConsistencyEngine, ConflictResolution
+from .consistency import ConsistencyEngine, ConsistencyCheck, ConflictResolution
+from .memory import MemorySystem
 from ..log import log_event
 
 
@@ -92,16 +93,18 @@ class ProcessingPipeline:
         result = pipeline.process(perception_input)
     """
 
-    def __init__(self, llm_client: Optional[LLMClient] = None) -> None:
+    def __init__(self, llm_client: Optional[LLMClient] = None, memory_system: Optional[MemorySystem] = None) -> None:
         """
         Initialize the processing pipeline.
 
         Args:
             llm_client: Optional LLM client. Creates default if not provided.
+            memory_system: Optional memory system for persistence. Creates default if not provided.
         """
         self._fragments_created: list[WorldFragment] = []
         self._llm = llm_client or LLMClient()
         self._consistency_engine = ConsistencyEngine(self._llm)
+        self._memory = memory_system or MemorySystem()
     
     def process(self, input: PerceptionInput) -> ProcessingResult:
         """
@@ -159,6 +162,26 @@ class ProcessingPipeline:
 
             self._fragments_created.append(fragment)
             result.success = True
+
+            try:
+                fragment_path = self._memory.write_fragment(fragment)
+                log_event(
+                    "fragment_persisted",
+                    f"Fragment written to world corpus: {fragment_path}",
+                    {
+                        "fragment_title": fragment.title,
+                        "fragment_path": str(fragment_path),
+                    }
+                )
+            except Exception as e:
+                log_event(
+                    "fragment_persist_error",
+                    f"Failed to persist fragment: {e}",
+                    {
+                        "fragment_title": fragment.title,
+                        "error": str(e),
+                    }
+                )
 
             log_event(
                 "processing",

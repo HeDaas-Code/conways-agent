@@ -19,6 +19,7 @@ from .pipeline import ProcessingPipeline, FitResult, ProcessingResult
 from .world_fragment import WorldFragment
 from .llm import LLMClient, LLMResponse
 from .consistency import ConsistencyEngine, ConsistencyCheck, Conflict, ConflictResolution
+from .memory import MemorySystem
 
 __all__ = [
     "initialize_agent",
@@ -37,4 +38,5 @@ __all__ = [
     "ConsistencyCheck",
     "Conflict",
     "ConflictResolution",
+    "MemorySystem",
 ]
