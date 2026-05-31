@@ -24,6 +24,8 @@ from .consistency import ConsistencyEngine, ConsistencyCheck, Conflict, Conflict
 from .memory import MemorySystem
 from .cycle import SleepWakeCycle
 from .dialogue import DialogueTurn, DialogueSession
+from .goals import Goal, GoalSystem, GoalStatus
+from .autonomous import AutonomousGoalCreator
 
 __all__ = [
     "initialize_agent",
@@ -46,6 +48,10 @@ __all__ = [
     "SleepWakeCycle",
     "DialogueTurn",
     "DialogueSession",
+    "Goal",
+    "GoalSystem",
+    "GoalStatus",
+    "AutonomousGoalCreator",
 ]
 
 
@@ -83,3 +89,9 @@ def AttentionWindow():
     """Lazy import for AttentionWindow."""
     from .attention import AttentionWindow as _AW
     return _AW
+
+
+def AutonomousGoalCreator():
+    """Lazy import for AutonomousGoalCreator."""
+    from .autonomous import AutonomousGoalCreator as _AGC
+    return _AGC
