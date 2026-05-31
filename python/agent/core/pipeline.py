@@ -21,8 +21,7 @@ from .llm import LLMClient
 from .state import AgentState
 from .world_fragment import WorldFragment
 from .perception import PerceptionInput
-from .consistency import ConsistencyCheck, ConsistencyEngine
-from .resolution import ConflictResolver, ConflictResolution
+from .consistency import ConsistencyCheck, ConsistencyEngine, ConflictResolution
 from ..log import log_event
 
 
@@ -60,9 +59,6 @@ class ProcessingResult:
         consistency_check: The consistency check result
         processing_time_ms: How long processing took
         errors: Any errors that occurred
-        status: Processing status ("success", "abandoned", "failed")
-        reason: Reason for non-success (e.g., abandonment reason)
-        resolution: Conflict resolution info if conflicts were found
     """
 
     success: bool
@@ -73,9 +69,6 @@ class ProcessingResult:
     errors: list[str] = field(default_factory=list)
     started_at: datetime = field(default_factory=datetime.now)
     completed_at: Optional[datetime] = None
-    status: str = "success"  # "success" | "abandoned" | "failed"
-    reason: str = ""  # Reason for abandonment or failure
-    resolution: Optional[ConflictResolution] = None
     
     def mark_complete(self) -> None:
         """Mark processing as complete and record elapsed time."""
@@ -146,30 +139,27 @@ class ProcessingPipeline:
                     {
                         "fragment_title": fragment.title,
                         "num_conflicts": len(check.conflicts),
-                        "warnings": check.warnings
                     }
                 )
 
                 resolution = self._consistency_engine.resolve_conflict(check, fragment)
+
                 if resolution.success and resolution.adjusted_fragment:
                     result.fragment = resolution.adjusted_fragment
                     fragment = result.fragment
 
                     log_event(
-                        "consistency_resolved",
-                        f"Conflicts resolved for '{fragment.title}'",
-                        {"resolution_method": resolution.resolution_method}
+                        "fragment_adjusted",
+                        f"Fragment adjusted to resolve conflicts",
+                        {
+                            "fragment_title": fragment.title,
+                            "resolution_method": resolution.resolution_method,
+                        }
                     )
-            elif check.warnings:
-                log_event(
-                    "consistency_warning",
-                    f"Consistency check completed with warnings",
-                    {"warnings": check.warnings}
-                )
 
             self._fragments_created.append(fragment)
             result.success = True
-            
+
             log_event(
                 "processing",
                 f"Processed {input.file_path} via {fragment.fit_path} path",
@@ -179,8 +169,7 @@ class ProcessingPipeline:
                     "fit_confidence": fit_result.confidence,
                     "fit_path": fragment.fit_path,
                     "fragment_title": fragment.title,
-                    "consistency_status": "consistent" if check.is_consistent else "conflicts_detected",
-                    "consistency_warnings": check.warnings
+                    "consistency_status": "consistent" if check.is_consistent else "conflicts_resolved",
                 }
             )
             
