@@ -23,6 +23,7 @@ from .world_fragment import WorldFragment
 from .perception import PerceptionInput
 from .consistency import ConsistencyEngine, ConsistencyCheck, ConflictResolution
 from .memory import MemorySystem
+from .trace import TraceInjector
 from ..log import log_event
 
 
@@ -87,24 +88,44 @@ class ProcessingPipeline:
     2. Transform: Either translate (high fit) or collide (low fit)
     3. Consistency check: Verify fragment consistency
     4. Log: Record the processing result
+    5. Optional: Inject trace into source file (if enabled)
 
     Usage:
         pipeline = ProcessingPipeline()
         result = pipeline.process(perception_input)
+        
+        # With trace injection:
+        pipeline = ProcessingPipeline(config={"inject_traces": True})
+        result = pipeline.process(perception_input)
     """
 
-    def __init__(self, llm_client: Optional[LLMClient] = None, memory_system: Optional[MemorySystem] = None) -> None:
+    def __init__(
+        self,
+        llm_client: Optional[LLMClient] = None,
+        memory_system: Optional[MemorySystem] = None,
+        config: Optional[dict] = None
+    ) -> None:
         """
         Initialize the processing pipeline.
 
         Args:
             llm_client: Optional LLM client. Creates default if not provided.
             memory_system: Optional memory system for persistence. Creates default if not provided.
+            config: Optional configuration dict. Supports:
+                - inject_traces: bool - Whether to inject traces into source files
+                - vault_path: Path - Path to Obsidian vault for trace injection
         """
         self._fragments_created: list[WorldFragment] = []
         self._llm = llm_client or LLMClient()
         self._consistency_engine = ConsistencyEngine(self._llm)
         self._memory = memory_system or MemorySystem()
+        self._config = config or {}
+        self._injector: Optional[TraceInjector] = None
+        
+        if self._config.get("inject_traces", False):
+            vault_path = self._config.get("vault_path")
+            if vault_path:
+                self._injector = TraceInjector(Path(vault_path))
     
     def process(self, input: PerceptionInput) -> ProcessingResult:
         """
@@ -195,6 +216,10 @@ class ProcessingPipeline:
                     "consistency_status": "consistent" if check.is_consistent else "conflicts_resolved",
                 }
             )
+
+            # Optionally inject trace into source file
+            if self._injector and input.file_path and result.success:
+                self._inject_trace(fragment, input.file_path)
             
         except Exception as e:
             result.errors.append(str(e))
@@ -856,6 +881,45 @@ class ProcessingPipeline:
             list[WorldFragment]: List of created fragments
         """
         return self._fragments_created.copy()
+    
+    def _inject_trace(self, fragment: WorldFragment, source_file: str) -> None:
+        """
+        Inject a trace into the source file.
+        
+        Args:
+            fragment: The processed fragment
+            source_file: Path to the source file
+        """
+        if not self._injector:
+            return
+        
+        try:
+            if not self._injector.can_inject(source_file):
+                log_event(
+                    "trace_blocked",
+                    f"Trace injection blocked for {source_file}",
+                    {"source_file": source_file}
+                )
+                return
+            
+            trace = self._injector.generate_trace(fragment)
+            success = self._injector.inject_trace(source_file, trace)
+            
+            log_event(
+                "trace_injected" if success else "trace_inject_failed",
+                f"Trace {'injected' if success else 'failed'} for {source_file}",
+                {
+                    "source_file": source_file,
+                    "fragment_title": fragment.title,
+                    "callout_type": trace.callout_type,
+                }
+            )
+        except Exception as e:
+            log_event(
+                "trace_inject_error",
+                f"Error injecting trace: {e}",
+                {"source_file": source_file, "error": str(e)}
+            )
 
 
 __all__ = ["ProcessingPipeline", "FitResult", "ProcessingResult", "ConsistencyCheck"]

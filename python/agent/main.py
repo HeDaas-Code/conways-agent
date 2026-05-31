@@ -13,6 +13,7 @@ Commands:
 from __future__ import annotations
 
 import argparse
+import os
 import signal
 import sys
 import time
@@ -214,7 +215,8 @@ def run_daemon_mode() -> None:
     3. Goes to sleep
     4. Repeats
     """
-    from agent.core.watcher import VaultWatcher
+    from agent.core.vault import get_vault_path
+    from agent.core.vitality import VaultVitalityMonitor, VitalityState
     
     print("正在启动 Daemon 模式 — 睡眠/唤醒循环 + 文件监听...")
     ensure_vault_dirs()
@@ -224,6 +226,8 @@ def run_daemon_mode() -> None:
     
     cycle = SleepWakeCycle(state)
     watcher = VaultWatcher()
+    vault_path = get_vault_path()
+    vitality = VaultVitalityMonitor(vault_path)
     
     wake_duration = state.wake_duration_seconds
     sleep_duration = state.sleep_duration_seconds
@@ -240,6 +244,28 @@ def run_daemon_mode() -> None:
     
     try:
         while True:
+            report = vitality.check()
+            
+            if report.state == VitalityState.DEAD:
+                print("\n\n[死亡] 图书馆消失了...")
+                print(f"  死亡时间: {report.checked_at.isoformat()}")
+                print(f"  原因: {report.message}")
+                vitality.handle_death()
+                log_shutdown("Agent died - vault no longer exists")
+                print("\n死亡日志已写入 agent/death-log.json")
+                print("Agent 已死亡。")
+                sys.exit(0)
+            
+            if report.state == VitalityState.POLLUTED:
+                print(f"\n[警告] {report.message}")
+                vitality.handle_pollution()
+            
+            if report.state == VitalityState.BORN:
+                print(f"\n[诞生] {report.message}")
+                vitality.on_fork(report.original_vault_path)
+            
+            if report.state == VitalityState.DYING:
+                print(f"\n[警告] {report.message}")
             if not cycle.is_awake:
                 if cycle.is_time_to_wake():
                     print("\n[唤醒] Agent 正在苏醒...")

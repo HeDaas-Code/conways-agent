@@ -184,6 +184,138 @@ class GoalSystem:
         all_goals = self.get_all_goals()
         return [g for g in all_goals if g.status in active_statuses]
 
+    def decompose_goal(self, parent_title: str, llm_client=None) -> list[Goal]:
+        """Decompose a goal into sub-goals using LLM.
+
+        1. Read the parent goal
+        2. Ask LLM to propose sub-goals
+        3. Create each sub-goal as a child of the parent
+        4. Return the list of created sub-goals
+        """
+        parent = self.get_goal(parent_title)
+        if not parent:
+            return []
+
+        goal_title = parent.title
+        goal_description = parent.description or "无详细描述"
+
+        prompt = f"""你是一个在无尽图书馆中思考的存在。你面前有一个目标：
+
+「{goal_title}」
+{goal_description}
+
+将这个目标分解为 3-5 个具体的子目标。每个子目标应该：
+- 是一个独立的、可执行的步骤
+- 有明确的完成标准
+- 按照逻辑顺序排列
+
+格式：
+子目标1：标题 — 一句话描述
+子目标2：标题 — 一句话描述
+..."""
+
+        if llm_client is None:
+            llm_client = LLMClient()
+
+        response = llm_client.complete_str(
+            system="你是一个目标分解专家，帮助将复杂目标分解为可执行的子目标。",
+            user=prompt
+        )
+
+        sub_goals = self._parse_sub_goals(response)
+        created_goals = []
+
+        for sub_title, sub_description in sub_goals:
+            sub_goal = self.create_goal(
+                title=sub_title,
+                description=sub_description,
+                parent=parent_title,
+                triggered_by="decomposition"
+            )
+            self.update_status(sub_title, "planned")
+            created_goals.append(sub_goal)
+
+        self.add_execution_log(
+            parent_title,
+            f"目标已分解为 {len(created_goals)} 个子目标"
+        )
+
+        return created_goals
+
+    def _parse_sub_goals(self, llm_response: str) -> list[tuple[str, str]]:
+        """Parse LLM response into sub-goal (title, description) tuples."""
+        sub_goals = []
+        lines = llm_response.strip().split('\n')
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            prefixes_to_try = ['子目标1', '子目标2', '子目标3', '子目标4', '子目标5',
+                               '1.', '2.', '3.', '4.', '5.', '- ', '* ']
+            for prefix in prefixes_to_try:
+                if line.startswith(prefix):
+                    line = line[len(prefix):].strip()
+                    break
+
+            if '：' in line or ':' in line:
+                delimiter = '：' if '：' in line else ':'
+                parts = line.split(delimiter, 1)
+                title = parts[0].strip()
+                description = parts[1].strip() if len(parts) > 1 else ""
+
+                title = title.lstrip('0123456789.、) ')
+                description = description.lstrip('—\-–: ')
+                description = description.rstrip('。.')
+
+                if title:
+                    sub_goals.append((title, description))
+
+        return sub_goals
+
+    def on_child_completed(self, parent_title: str) -> bool:
+        """Check if all children are done, if so complete the parent.
+
+        Returns:
+            True if parent was auto-completed, False otherwise
+        """
+        parent = self.get_goal(parent_title)
+        if not parent:
+            return False
+
+        if not parent.children:
+            return False
+
+        all_completed = True
+        for child_title in parent.children:
+            child = self.get_goal(child_title)
+            if child is None:
+                all_completed = False
+                break
+            if child.status not in ("completed", "failed"):
+                all_completed = False
+                break
+
+        if all_completed:
+            self.complete_goal(parent_title)
+            self.add_execution_log(
+                parent_title,
+                "所有子目标已完成，父目标自动完成"
+            )
+            return True
+
+        return False
+
+    def has_active_goal(self, title: str) -> bool:
+        """Check if a goal with similar title exists and is active."""
+        active_statuses: list[GoalStatus] = ["proposed", "accepted", "planned", "in_progress"]
+        all_goals = self.get_all_goals()
+        for goal in all_goals:
+            if goal.title == title and goal.status in active_statuses:
+                return True
+        return False
+
     def _safe_filename(self, title: str) -> str:
         """Convert a title to a safe filename."""
         safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in title)

@@ -187,10 +187,9 @@ class AutonomousGoalCreator:
             return None
         
         if not should_pursue:
-            goal = Goal(
+            goal = self.goals.create_goal(
                 title=title,
                 description=description,
-                status="proposed",
                 triggered_by=triggered_by,
             )
             return goal
