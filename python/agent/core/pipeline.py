@@ -21,6 +21,7 @@ from .llm import LLMClient
 from .state import AgentState
 from .world_fragment import WorldFragment
 from .perception import PerceptionInput
+from .consistency import ConsistencyCheck, ConsistencyEngine
 from ..log import log_event
 
 
@@ -50,18 +51,20 @@ class FitResult:
 class ProcessingResult:
     """
     Result of processing a PerceptionInput through the pipeline.
-    
+
     Attributes:
         success: Whether processing completed successfully
         fragment: The created WorldFragment (if successful)
         fit_result: The fit judgment result
+        consistency_check: The consistency check result
         processing_time_ms: How long processing took
         errors: Any errors that occurred
     """
-    
+
     success: bool
     fragment: Optional[WorldFragment] = None
     fit_result: Optional[FitResult] = None
+    consistency_check: Optional[ConsistencyCheck] = None
     processing_time_ms: float = 0.0
     errors: list[str] = field(default_factory=list)
     started_at: datetime = field(default_factory=datetime.now)
@@ -637,14 +640,25 @@ class ProcessingPipeline:
             if title_match:
                 title = title_match.group(1).strip()
 
-            # Extract content (everything after title until the metadata section)
-            content_match = re.search(
-                r'^#\s+.+?\n+(.+?)(?=\n+标签:|\n+来源:|\n+相关链接:|$)',
-                response,
-                re.DOTALL | re.MULTILINE
-            )
-            if content_match:
-                content = content_match.group(1).strip()
+            # Extract content: everything between title and metadata lines
+            # Find position of title and metadata sections
+            title_pos = response.find('# ' + title)
+            if title_pos >= 0:
+                # Find end of title line
+                title_end = response.find('\n', title_pos)
+                if title_end > 0:
+                    # Find where metadata starts (标签:, 来源:, 相关链接:)
+                    metadata_positions = []
+                    for marker in ['标签:', '来源:', '相关链接:']:
+                        pos = response.find(marker, title_end)
+                        if pos > 0:
+                            metadata_positions.append(pos)
+                    
+                    if metadata_positions:
+                        content_end = min(metadata_positions)
+                        content = response[title_end:content_end].strip()
+                    else:
+                        content = response[title_end:].strip()
 
             # Extract wikilinks from 相关链接 section
             links_match = re.search(r'相关链接:\s*(.+?)(?:\n|$)', response, re.DOTALL)

@@ -26,6 +26,14 @@ from agent.core.pipeline import (
 from agent.core.world_fragment import WorldFragment
 
 
+# Mock log_event to avoid OBSIDIAN_VAULT_PATH dependency
+@pytest.fixture(autouse=True)
+def mock_log_event():
+    """Mock log_event to avoid environment dependency in tests."""
+    with patch("agent.core.pipeline.log_event") as mock:
+        yield mock
+
+
 class TestFitResult:
     """Tests for FitResult dataclass."""
 
