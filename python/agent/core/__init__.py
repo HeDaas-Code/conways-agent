@@ -22,6 +22,8 @@ from .llm import LLMClient, LLMResponse
 from .consistency import ConsistencyEngine, ConsistencyCheck, Conflict, ConflictResolution
 from .memory import MemorySystem
 from .cycle import SleepWakeCycle
+from .dialogue import DialogueTurn, DialogueSession
+from .watcher import FileEvent, VaultWatcher
 
 __all__ = [
     "initialize_agent",
@@ -42,4 +44,8 @@ __all__ = [
     "ConflictResolution",
     "MemorySystem",
     "SleepWakeCycle",
+    "DialogueTurn",
+    "DialogueSession",
+    "FileEvent",
+    "VaultWatcher",
 ]
