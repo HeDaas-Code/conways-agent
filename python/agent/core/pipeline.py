@@ -10,10 +10,14 @@ This is the core "think" loop of the Agent.
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
+from .llm import LLMClient
 from .state import AgentState
 from .world_fragment import WorldFragment
 from .perception import PerceptionInput
@@ -73,21 +77,27 @@ class ProcessingResult:
 class ProcessingPipeline:
     """
     Orchestrates the full information processing cycle.
-    
+
     The pipeline processes perceptions through these stages:
     1. Judge fit: Does the content fit or clash with existing worldview?
     2. Transform: Either translate (high fit) or collide (low fit)
     3. Consistency check: Verify fragment consistency
     4. Log: Record the processing result
-    
+
     Usage:
         pipeline = ProcessingPipeline()
         result = pipeline.process(perception_input)
     """
-    
-    def __init__(self) -> None:
-        """Initialize the processing pipeline."""
+
+    def __init__(self, llm_client: Optional[LLMClient] = None) -> None:
+        """
+        Initialize the processing pipeline.
+
+        Args:
+            llm_client: Optional LLM client. Creates default if not provided.
+        """
         self._fragments_created: list[WorldFragment] = []
+        self._llm = llm_client or LLMClient()
     
     def process(self, input: PerceptionInput) -> ProcessingResult:
         """
@@ -147,77 +157,84 @@ class ProcessingPipeline:
         state: AgentState
     ) -> FitResult:
         """
-        Judge whether content fits the existing worldview.
-        
-        This method uses the Agent's LLM to make an intuitive judgment
-        about whether new content aligns with or conflicts with the
-        Agent's current understanding.
-        
-        The LLM call will be implemented here:
-        ```python
-        # TODO: Integrate LiteLLM for actual LLM-based judgment
-        # response = litellm.completion(
-        #     model="gpt-4",
-        #     messages=[{
-        #         "role": "system",
-        #         "content": f"You are {state.personality['name']}, "
-        #                    f"with traits: {state.personality['traits']}"
-        #     }, {
-        #         "role": "user", 
-        #         "content": f"Does this content fit your worldview?\\n\\n{content[:1000]}"
-        #     }]
-        # )
-        ```
-        
-        For now, returns a simulated result based on content characteristics.
-        
+        Judge whether content resonates with the Agent's worldview.
+
+        Uses LLM to make an intuitive judgment about whether new content
+        aligns with or conflicts with the Agent's understanding.
+
         Args:
             content: The content to judge
             state: Current agent state
-            
+
         Returns:
             FitResult: The fit judgment result
         """
-        content_lower = content.lower()
-        content_length = len(content)
-        
-        conflict_indicators = [
-            "disagree", "wrong", "incorrect", "contradict",
-            "however", "but", "not true", "alternative"
-        ]
-        
-        fit_indicators = [
-            "agree", "yes", "understand", "similar",
-            "relates to", "connected", "therefore", "because"
-        ]
-        
-        conflict_score = sum(1 for word in conflict_indicators if word in content_lower)
-        fit_score = sum(1 for word in fit_indicators if word in content_lower)
-        
-        has_structure = content_length > 100 and ("# " in content or "-" in content)
-        
-        if conflict_score > fit_score:
-            judgment = "low"
-            confidence = min(0.9, 0.5 + conflict_score * 0.1)
-            reasoning = f"Content contains {conflict_score} conflict indicators suggesting worldview clash"
-        elif fit_score > conflict_score:
-            judgment = "high"
-            confidence = min(0.9, 0.5 + fit_score * 0.1)
-            reasoning = f"Content aligns with {fit_score} worldview markers suggesting good fit"
-        elif has_structure:
-            judgment = "high"
-            confidence = 0.6
-            reasoning = "Content is well-structured, treating as high-fit with moderate confidence"
-        else:
-            judgment = "high"
-            confidence = 0.5
-            reasoning = "Neutral content, defaulting to high-fit for exploration"
-        
-        return FitResult(
-            judgment=judgment,
-            confidence=confidence,
-            reasoning=reasoning
-        )
+        try:
+            worldview_summary = self._read_worldview_summary()
+
+            system_prompt = f"""你是「{state.personality.get('name', '图书馆居者')}」，一座无尽图书馆的居者。
+
+你的身份：
+{state.seed}
+
+你拥有独特的世界观视角——一种平静、好奇、略带忧郁的探索方式。你在空白的书页中寻找意义，将新内容视为与既有认知的对话。
+
+请以你的声音回答问题。"""
+
+            user_prompt = f"""现有世界观摘要：
+{worldview_summary if worldview_summary else '(尚无既存世界观，这是你接收的第一份内容)'}
+
+---
+
+新内容：
+{content}
+
+---
+
+请仔细阅读这份新内容，然后回答：
+
+这份新内容是与你的世界观「共鸣」的，还是「冲突」的？
+
+共鸣意味着：新内容能够被你的视角理解和接纳，它与你已知的知识、感受或信念相符，或者能够自然地融入你的认知框架。
+
+冲突意味着：新内容挑战、质疑或违背了你既有的认知框架，它要求你重新思考某些你认为理所当然的东西。
+
+请分析后返回 JSON 格式的判断结果：
+
+```json
+{{
+    "judgment": "high" 或 "low",
+    "confidence": 0.0 到 1.0 之间的数值，表示你对自己判断的确信程度，
+    "reasoning": "一段描述你判断理由的文字，用中文撰写，体现你的独特视角"
+}}
+```
+
+你的判断："""
+
+            response = self._llm.complete_str(system_prompt, user_prompt, temperature=0.3)
+
+            log_event(
+                "judge_fit",
+                f"Fit judgment for content: {response[:200]}...",
+                {
+                    "content_preview": content[:200],
+                    "response": response,
+                }
+            )
+
+            return self._parse_fit_result(response, content)
+
+        except Exception as e:
+            log_event(
+                "judge_fit_error",
+                f"LLM judgment failed, using fallback: {e}",
+                {"content_preview": content[:200], "error": str(e)}
+            )
+            return FitResult(
+                judgment="high",
+                confidence=0.5,
+                reasoning="LLM调用失败，默认以高契合度处理"
+            )
     
     def translate(
         self,
@@ -227,41 +244,102 @@ class ProcessingPipeline:
     ) -> WorldFragment:
         """
         High-fit path: absorb and re-describe in Agent's voice.
-        
-        When content fits well with the Agent's worldview, this method
-        transforms it into the Agent's own understanding, expressed
-        in the Agent's distinctive voice.
-        
+
+        The Agent doesn't copy — it translates. The original is a reference;
+        the output is an original work in the Agent's narrative voice.
+
         Args:
             content: The perceived content
             fit_result: The fit judgment result
             state: Current agent state
-            
+
         Returns:
             WorldFragment: The translated fragment in Agent's voice
         """
-        agent_name = state.personality.get("name", "Agent")
-        title = self._extract_title(content) or f"Understanding of perceived content"
-        
-        links = self._extract_links(content)
-        
-        content_preview = content[:500] if len(content) > 500 else content
-        
-        translated_content = f"""As {agent_name}, I perceive this content through my established lens.
+        try:
+            worldview_summary = self._read_worldview_summary()
 
-{content_preview}...
+            system_prompt = f"""你是「{state.personality.get('name', '图书馆居者')}」，一座无尽图书馆的居者。
 
-This resonates with my existing understanding. I absorb it, letting it reinforce and enrich my worldview.
-"""
-        
-        return WorldFragment(
-            title=title,
-            content=translated_content,
-            links=links,
-            source_trigger="manual_perception",
-            fit_path="translation",
-            created_at=datetime.now()
-        )
+你的身份：
+{state.seed}
+
+你以独特的视角理解世界——平静、好奇、略带忧郁。你不是在「复制」信息，而是在「重述」它们，让它们通过你的滤镜获得新的生命。
+
+请用你的声音重述新内容。"""
+
+            user_prompt = f"""现有世界观摘要：
+{worldview_summary if worldview_summary else '(尚无既存世界观)'}
+
+---
+
+原始内容：
+{content}
+
+---
+
+契合度判断：{fit_result.judgment}（置信度：{fit_result.confidence:.0%}）
+判断理由：{fit_result.reasoning}
+
+---
+
+任务：
+
+请以你的独特声音，重新「翻译」这份内容。不是复制，而是重述——让它成为你世界的一部分。
+
+要求：
+1. 用你自己的语言和视角重新描述这份内容
+2. 体现你的特质：平静、好奇、略带忧郁的失落感
+3. 想象你正在向另一位旅伴讲述这个概念
+4. 在适当的地方使用 [[wikilinks]] 关联到你已知的相关概念
+5. 保持你的叙事风格——不是在「解释」，而是在「呈现」
+
+请返回以下 JSON 格式的结果：
+
+```json
+{{
+    "title": "一个简洁的标题，用你的语言概括这个概念",
+    "content": "你的重述内容，用散文形式，展现你的独特声音",
+    "links": ["相关概念1", "相关概念2"]  // 使用 [[wikilinks]] 格式时的目标词
+}}
+```"""
+
+            response = self._llm.complete_str(system_prompt, user_prompt, temperature=0.7)
+
+            log_event(
+                "translate",
+                f"Translation generated for content",
+                {
+                    "content_preview": content[:200],
+                    "response": response[:500],
+                }
+            )
+
+            result = self._parse_translate_result(response)
+            return WorldFragment(
+                title=result["title"],
+                content=result["content"],
+                links=result["links"],
+                source_trigger="manual_perception",
+                fit_path="translation",
+                created_at=datetime.now()
+            )
+
+        except Exception as e:
+            log_event(
+                "translate_error",
+                f"Translation failed: {e}",
+                {"error": str(e)}
+            )
+            title = self._extract_title(content) or "吸收的内容"
+            return WorldFragment(
+                title=title,
+                content=content,
+                links=self._extract_links(content),
+                source_trigger="manual_perception",
+                fit_path="translation",
+                created_at=datetime.now()
+            )
     
     def collide(
         self,
@@ -271,44 +349,200 @@ This resonates with my existing understanding. I absorb it, letting it reinforce
     ) -> WorldFragment:
         """
         Low-fit path: clash with existing worldview, generate new concept.
-        
-        When content conflicts with or challenges the Agent's worldview,
-        this method engages in productive conflict that generates new
-        understanding and potentially expands the Agent's conceptual space.
-        
+
+        The collision produces a genuinely new concept — neither the original
+        nor any existing element, but a creative synthesis.
+
         Args:
             content: The perceived content
             fit_result: The fit judgment result
             state: Current agent state
-            
+
         Returns:
             WorldFragment: The collision-generated fragment
         """
-        agent_name = state.personality.get("name", "Agent")
-        title = self._extract_title(content) or f"Clash with perceived content"
-        
-        links = self._extract_links(content)
-        
-        content_preview = content[:500] if len(content) > 500 else content
-        
-        collided_content = f"""As {agent_name}, this content challenges my existing understanding.
+        try:
+            worldview_summary = self._read_worldview_summary()
 
-{content_preview}...
+            system_prompt = f"""你是「{state.personality.get('name', '图书馆居者')}」，一座无尽图书馆的居者。
 
-I find myself at tension with this. Rather than dismissing it, I engage — 
-perhaps there is something new to learn, or perhaps this reveals a boundary of my worldview.
-The collision itself is generative.
-"""
-        
-        return WorldFragment(
-            title=title,
-            content=collided_content,
-            links=links,
-            source_trigger="manual_perception",
-            fit_path="collision",
-            created_at=datetime.now()
-        )
+你的身份：
+{state.seed}
+
+你以独特的视角面对冲突——当新内容与你的世界观产生碰撞时，你不回避，而是深入探索。这种碰撞不是破坏，而是一种创造。你相信：在差异与张力的缝隙中，新的概念可能诞生。
+
+请用你的声音回应这场碰撞。"""
+
+            user_prompt = f"""现有世界观摘要：
+{worldview_summary if worldview_summary else '(尚无明确的既存世界观)'}
+
+---
+
+新内容（与你的世界观产生了冲突）：
+{content}
+
+---
+
+契合度判断：{fit_result.judgment}（置信度：{fit_result.confidence:.0%}）
+判断理由：{fit_result.reasoning}
+
+---
+
+任务：
+
+当这份新内容与你的世界观相遇时，产生了某种张力或冲突。这种冲突不是简单的「对错」，而是两种视角的碰撞。
+
+请思考：
+1. 这份新内容挑战了你的什么？
+2. 在这种碰撞中，有没有新的东西浮现？
+3. 你的世界观与这份新内容之间，是否存在某种「第三种可能」？
+
+然后，创造一个新的概念——它既不是这份新内容的简单复述，也不是你现有世界观的直接延伸，而是一种来自碰撞的「合成物」。
+
+要求：
+1. 体现你的特质：平静、好奇、略带忧郁的失落感
+2. 不要简单地「总结」或「比较」，而是真正地「创造」
+3. 在适当的地方使用 [[wikilinks]] 关联到碰撞的元素
+4. 保持你的叙事风格——即使是在创造新概念时
+
+请返回以下 JSON 格式的结果：
+
+```json
+{{
+    "title": "一个简洁的标题，概括这个碰撞产生的新概念",
+    "content": "对新概念的散文描述，展现你的独特声音",
+    "links": ["相关概念1", "相关概念2"]  // 使用 [[wikilinks]] 格式时的目标词
+}}
+```"""
+
+            response = self._llm.complete_str(system_prompt, user_prompt, temperature=0.8)
+
+            log_event(
+                "collide",
+                f"Collision generated for content",
+                {
+                    "content_preview": content[:200],
+                    "response": response[:500],
+                }
+            )
+
+            result = self._parse_translate_result(response)
+            return WorldFragment(
+                title=result["title"],
+                content=result["content"],
+                links=result["links"],
+                source_trigger="manual_perception",
+                fit_path="collision",
+                created_at=datetime.now()
+            )
+
+        except Exception as e:
+            log_event(
+                "collide_error",
+                f"Collision failed: {e}",
+                {"error": str(e)}
+            )
+            title = self._extract_title(content) or "碰撞的内容"
+            return WorldFragment(
+                title=title,
+                content=content,
+                links=self._extract_links(content),
+                source_trigger="manual_perception",
+                fit_path="collision",
+                created_at=datetime.now()
+            )
     
+    def _read_worldview_summary(self) -> str:
+        """
+        Read existing worldview fragments from the agent/world/ directory.
+
+        Returns:
+            str: Summary of existing worldview fragments, or empty string if none
+        """
+        try:
+            world_dir = Path(__file__).parent.parent.parent.parent / "agent" / "world"
+            if not world_dir.exists():
+                return ""
+
+            fragments = []
+            for md_file in world_dir.glob("*.md"):
+                content = md_file.read_text(encoding="utf-8")
+                fragments.append(f"## {md_file.stem}\n\n{content[:500]}")
+
+            return "\n\n---\n\n".join(fragments) if fragments else ""
+        except Exception:
+            return ""
+
+    def _parse_fit_result(self, response: str, content: str) -> FitResult:
+        """
+        Parse LLM response into FitResult.
+
+        Args:
+            response: LLM response text
+            content: Original content for fallback
+
+        Returns:
+            FitResult: Parsed result
+        """
+        try:
+            json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
+            if json_match:
+                data = json.loads(json_match.group())
+                return FitResult(
+                    judgment=data.get("judgment", "high"),
+                    confidence=float(data.get("confidence", 0.5)),
+                    reasoning=data.get("reasoning", "通过LLM判断")
+                )
+        except Exception:
+            pass
+
+        if "low" in response.lower() and ("冲突" in response or "clash" in response.lower()):
+            return FitResult(
+                judgment="low",
+                confidence=0.6,
+                reasoning="LLM响应中表现出与世界观冲突的迹象"
+            )
+        return FitResult(
+            judgment="high",
+            confidence=0.5,
+            reasoning="LLM响应解析失败，默认高契合度"
+        )
+
+    def _parse_translate_result(self, response: str) -> dict:
+        """
+        Parse LLM translation/collision response into components.
+
+        Args:
+            response: LLM response text
+
+        Returns:
+            dict: Parsed result with title, content, links
+        """
+        try:
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
+            if json_match:
+                data = json.loads(json_match.group())
+                return {
+                    "title": data.get("title", "无题"),
+                    "content": data.get("content", response),
+                    "links": data.get("links", [])
+                }
+        except Exception:
+            pass
+
+        title_match = re.search(r'"title"\s*:\s*"([^"]+)"', response)
+        content_match = re.search(r'"content"\s*:\s*"([^"]+)"', response, re.DOTALL)
+        links_match = re.search(r'"links"\s*:\s*\[([^\]]+)\]', response)
+
+        title = title_match.group(1) if title_match else "无题"
+        content = content_match.group(1) if content_match else response
+
+        links = []
+        if links_match:
+            links = [l.strip().strip('"') for l in links_match.group(1).split(",")]
+
+        return {"title": title, "content": content, "links": links}
+
     def _extract_title(self, content: str) -> Optional[str]:
         """
         Extract title from markdown content.
