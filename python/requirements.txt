@@ -3,3 +3,5 @@ python-dotenv>=1.0.0
 notify>=0.1.0
 rich>=13.0.0
 textual>=0.50.0
+uvicorn>=0.30.0
+fastapi>=0.110.0

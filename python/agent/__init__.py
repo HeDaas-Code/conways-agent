@@ -15,6 +15,8 @@ from .core import (
     FitResult,
     ProcessingResult,
     WorldFragment,
+    DialogueSession,
+    DialogueTurn,
 )
 from .log import (
     log_event,
@@ -40,6 +42,8 @@ __all__ = [
     "FitResult",
     "ProcessingResult",
     "WorldFragment",
+    "DialogueSession",
+    "DialogueTurn",
     "log_event",
     "log_startup",
     "log_shutdown",
