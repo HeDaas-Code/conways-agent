@@ -1,491 +1,527 @@
 """
-Evolution System
+Personality Review System
 
-Provides self-modification capabilities for the Agent based on review results.
-Agents can modify their own processing parameters while protecting core identity.
+Monitors and evolves the Agent's personality over time through periodic reviews,
+detecting drift and growth in processing patterns and parameters.
 """
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass, asdict
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional
 
-
-class ProtectedParameters:
-    """
-    Parameters that cannot be modified by the Agent.
-    
-    These are the core identity markers and founding seeds that define
-    who the Agent is — they are protected from self-modification.
-    """
-    
-    PROTECTED: set[str] = {
-        "seed",           # The founding seed — who the Agent is
-        "core_identity",  # Core identity markers
-    }
-    
-    @classmethod
-    def can_modify(cls, param: str) -> bool:
-        """
-        Check if a parameter can be modified.
-        
-        Args:
-            param: The parameter name to check
-            
-        Returns:
-            bool: True if the parameter is not protected
-        """
-        return param not in cls.PROTECTED
+from .state import AgentState
+from .llm import LLMClient
+from .memory import MemorySystem
+from .vault import get_vault_path
 
 
 @dataclass
-class ParameterModification:
-    """
-    Record of a single parameter modification.
-    
-    Attributes:
-        modified_at: Timestamp of the modification
-        parameter: The parameter that was modified
-        old_value: The value before modification
-        new_value: The new value after modification
-        reason: Why the modification was made
-        review_id: Optional ID of the review that triggered this modification
-    """
-    
-    modified_at: str
-    parameter: str
-    old_value: Any
-    new_value: Any
-    reason: str
-    review_id: Optional[str] = None
-    
+class PersonalitySnapshot:
+    """A snapshot of the Agent's personality at a point in time."""
+    captured_at: datetime
+    curiosity_level: float
+    fit_threshold: float
+    attention_window_size: int
+    active_goals_count: int
+    world_corpus_size: int
+    processing_patterns: list[str]
+    notes: str = ""
+
     def to_dict(self) -> dict:
-        """Convert to dictionary for JSON serialization."""
-        return {
-            "modified_at": self.modified_at,
-            "parameter": self.parameter,
-            "old_value": self.old_value,
-            "new_value": self.new_value,
-            "reason": self.reason,
-            "review_id": self.review_id,
-        }
-    
+        """Convert snapshot to dictionary for serialization."""
+        data = asdict(self)
+        data["captured_at"] = self.captured_at.isoformat()
+        return data
+
     @classmethod
-    def from_dict(cls, data: dict) -> ParameterModification:
-        """Create from dictionary."""
-        return cls(
-            modified_at=data["modified_at"],
-            parameter=data["parameter"],
-            old_value=data["old_value"],
-            new_value=data["new_value"],
-            reason=data["reason"],
-            review_id=data.get("review_id"),
-        )
+    def from_dict(cls, data: dict) -> PersonalitySnapshot:
+        """Create snapshot from dictionary."""
+        if isinstance(data["captured_at"], str):
+            data["captured_at"] = datetime.fromisoformat(data["captured_at"])
+        return cls(**data)
+
+    def to_markdown(self) -> str:
+        """Convert snapshot to markdown format for storage."""
+        patterns_str = ", ".join(self.processing_patterns) if self.processing_patterns else "无"
+        return f"""---
+snapshot_at: {self.captured_at.isoformat()}
+curiosity_level: {self.curiosity_level}
+fit_threshold: {self.fit_threshold}
+attention_window_size: {self.attention_window_size}
+active_goals: {self.active_goals_count}
+world_corpus_size: {self.world_corpus_size}
+processing_patterns: {patterns_str}
+---
+
+# 人格快照 {self.captured_at.strftime('%Y-%m-%d')}
+
+处理模式：{patterns_str}
+
+{("# 状态参数\n- 好奇心强度：" + str(self.curiosity_level) + "\n- 契合度阈值：" + str(self.fit_threshold) + "\n- 注意力窗口：" + str(self.attention_window_size) + "\n- 活跃目标数：" + str(self.active_goals_count) + "\n- 世界语料库大小：" + str(self.world_corpus_size)) if not self.notes else ("\n## 备注\n" + self.notes)}"""
 
 
 class EvolutionSystem:
-    """
-    Manages Agent self-modification based on review results.
-    
-    The Agent can adjust its own processing parameters (like curiosity_level,
-    fit_threshold, attention_window_size) based on periodic reviews, while
-    core identity parameters remain protected.
-    
-    All modifications are:
-    - Gradual (max ±20% per review)
-    - Logged with reasoning
-    - Reversible via rollback
-    
-    Usage:
-        evolution = EvolutionSystem(state)
-        modifications = evolution.apply_review_insights(review_data)
-        evolution.modify_parameter("curiosity_level", 0.6, "Too high")
-    """
-    
-    # Maximum allowed change per review (as a fraction, 0.2 = 20%)
-    MAX_CHANGE_RATE: float = 0.20
-    
-    def __init__(self, state_path: Optional[Path] = None):
+    """Monitors and evolves the Agent's personality over time."""
+
+    # Review triggers
+    DEFAULT_CYCLES_THRESHOLD = 100
+    DEFAULT_CORPUS_GROWTH_THRESHOLD = 5
+
+    def __init__(
+        self,
+        state: AgentState,
+        memory: MemorySystem,
+        llm: LLMClient,
+        history_dir: Optional[Path] = None,
+        cycles_threshold: int = DEFAULT_CYCLES_THRESHOLD,
+        corpus_growth_threshold: int = DEFAULT_CORPUS_GROWTH_THRESHOLD,
+    ):
         """
         Initialize the evolution system.
-        
+
         Args:
-            state_path: Path to agent state file. Defaults to agent/state.json.
+            state: Agent state
+            memory: Memory system
+            llm: LLM client for reflection
+            history_dir: Directory for snapshot storage (defaults to agent/personality-history/)
+            cycles_threshold: Number of cycles between reviews
+            corpus_growth_threshold: Number of new fragments to trigger review
         """
-        if state_path is None:
-            from .vault import get_state_path
-            state_path = get_state_path()
-        
-        self._state_path = state_path
-        self._history_path = state_path.parent / "parameter-history.json"
-        self._modifications: list[ParameterModification] = []
-        self._load_history()
-    
-    def _load_history(self) -> None:
-        """Load modification history from file."""
-        if self._history_path.exists():
-            try:
-                content = self._history_path.read_text(encoding="utf-8")
-                data = json.loads(content)
-                self._modifications = [
-                    ParameterModification.from_dict(m) for m in data.get("modifications", [])
-                ]
-            except (json.JSONDecodeError, KeyError):
-                self._modifications = []
+        self.state = state
+        self.memory = memory
+        self.llm = llm
+        self.cycles_threshold = cycles_threshold
+        self.corpus_growth_threshold = corpus_growth_threshold
+
+        if history_dir is None:
+            vault_path = get_vault_path()
+            self._history_dir = vault_path / "agent" / "personality-history"
         else:
-            self._modifications = []
-    
-    def _save_history(self) -> None:
-        """Save modification history to file."""
-        self._history_path.parent.mkdir(parents=True, exist_ok=True)
-        data = {
-            "last_updated": datetime.now().isoformat(),
-            "modifications": [m.to_dict() for m in self._modifications],
+            self._history_dir = history_dir
+
+        self._history_dir.mkdir(parents=True, exist_ok=True)
+        self._last_corpus_size = self._get_corpus_size()
+        self._last_review_cycles = state.total_cycles
+
+    def _get_corpus_size(self) -> int:
+        """Get current world corpus size."""
+        return len(self.memory.read_all_fragments())
+
+    def _get_active_goals_count(self) -> int:
+        """Get count of active goals from state."""
+        return self.state.total_cycles
+
+    def _detect_processing_patterns(self) -> list[str]:
+        """Analyze memory system to detect processing patterns."""
+        patterns = []
+        fragments = self.memory.read_all_fragments()
+
+        if not fragments:
+            return patterns
+
+        fit_path_counts: dict[str, int] = {}
+        for fragment in fragments:
+            fit_path = getattr(fragment, 'fit_path', 'translation')
+            fit_path_counts[fit_path] = fit_path_counts.get(fit_path, 0) + 1
+
+        if fit_path_counts:
+            dominant = max(fit_path_counts.items(), key=lambda x: x[1])
+            if dominant[1] > 0:
+                if dominant[0] == "collision":
+                    patterns.append("favors collision")
+                elif dominant[0] == "translation":
+                    patterns.append("prefers translation")
+                elif dominant[0] == "resolution":
+                    patterns.append("focuses on resolution")
+
+        if len(fit_path_counts) >= 2:
+            total = sum(fit_path_counts.values())
+            ratios = [count / total for count in fit_path_counts.values()]
+            if all(0.2 <= r <= 0.5 for r in ratios):
+                patterns.append("balanced approach")
+
+        return patterns
+
+    def take_snapshot(self) -> PersonalitySnapshot:
+        """Take a snapshot of current personality state."""
+        snapshot = PersonalitySnapshot(
+            captured_at=datetime.now(),
+            curiosity_level=self.state.curiosity_level,
+            fit_threshold=self.state.fit_threshold,
+            attention_window_size=self.state.attention_window_size,
+            active_goals_count=self._get_active_goals_count(),
+            world_corpus_size=self._get_corpus_size(),
+            processing_patterns=self._detect_processing_patterns(),
+        )
+        return snapshot
+
+    def save_snapshot(self, snapshot: PersonalitySnapshot) -> Path:
+        """
+        Save a snapshot to the history directory.
+
+        Args:
+            snapshot: The snapshot to save
+
+        Returns:
+            Path: Path to the saved snapshot file
+        """
+        filename = f"snapshot-{snapshot.captured_at.strftime('%Y%m%d-%H%M%S-%f')}.md"
+        file_path = self._history_dir / filename
+        file_path.write_text(snapshot.to_markdown(), encoding="utf-8")
+        return file_path
+
+    def load_snapshots(self) -> list[PersonalitySnapshot]:
+        """
+        Load all snapshots from the history directory.
+
+        Returns:
+            list[PersonalitySnapshot]: List of snapshots sorted by capture time
+        """
+        snapshots = []
+
+        for md_file in sorted(self._history_dir.glob("snapshot-*.md")):
+            try:
+                content = md_file.read_text(encoding="utf-8")
+                snapshot = self._parse_snapshot_file(content)
+                snapshots.append(snapshot)
+            except Exception:
+                continue
+
+        snapshots.sort(key=lambda s: s.captured_at)
+        return snapshots
+
+    def _parse_snapshot_file(self, content: str) -> PersonalitySnapshot:
+        """Parse a snapshot markdown file."""
+        import re
+
+        frontmatter_match = re.match(r'^---\n(.*?)\n---', content, re.DOTALL)
+        if not frontmatter_match:
+            raise ValueError("Invalid snapshot format: missing frontmatter")
+
+        frontmatter: dict = {}
+        for line in frontmatter_match.group(1).split('\n'):
+            if ':' in line:
+                key, value = line.split(':', 1)
+                frontmatter[key.strip()] = value.strip()
+
+        patterns_str = frontmatter.get('processing_patterns', '')
+        patterns = [p.strip() for p in patterns_str.split(',') if p.strip()] if patterns_str else []
+
+        return PersonalitySnapshot(
+            captured_at=datetime.fromisoformat(frontmatter['snapshot_at']),
+            curiosity_level=float(frontmatter['curiosity_level']),
+            fit_threshold=float(frontmatter['fit_threshold']),
+            attention_window_size=int(frontmatter['attention_window_size']),
+            active_goals_count=int(frontmatter['active_goals']),
+            world_corpus_size=int(frontmatter['world_corpus_size']),
+            processing_patterns=patterns,
+        )
+
+    def _get_previous_snapshot(self) -> Optional[PersonalitySnapshot]:
+        """Get the most recent snapshot if any."""
+        snapshots = self.load_snapshots()
+        return snapshots[-1] if snapshots else None
+
+    def _build_review_prompt(self, previous_snapshot: Optional[PersonalitySnapshot]) -> str:
+        """Build the review prompt for LLM reflection."""
+        current_snapshot = self.take_snapshot()
+
+        if previous_snapshot:
+            prev_summary = (
+                f"- 快照时间：{previous_snapshot.captured_at.strftime('%Y-%m-%d %H:%M')}\n"
+                f"- 好奇心强度：{previous_snapshot.curiosity_level}\n"
+                f"- 契合度阈值：{previous_snapshot.fit_threshold}\n"
+                f"- 注意力窗口：{previous_snapshot.attention_window_size}\n"
+                f"- 世界语料库大小：{previous_snapshot.world_corpus_size}\n"
+                f"- 处理模式：{', '.join(previous_snapshot.processing_patterns) or '无'}"
+            )
+        else:
+            prev_summary = "（首次快照，无历史数据）"
+
+        return f"""你是无尽图书馆的居者。你正在回顾自己的变化。
+
+【当前状态】
+好奇心强度：{current_snapshot.curiosity_level}
+契合度阈值：{current_snapshot.fit_threshold}
+注意力窗口：{current_snapshot.attention_window_size}
+世界语料库大小：{current_snapshot.world_corpus_size}
+活跃目标数：{current_snapshot.active_goals_count}
+
+【历史状态】
+{prev_summary}
+
+请回顾自己：你发生了什么变化？有什么是你之前不理解、现在理解了？有什么是你以前做的方式、现在改变了？
+
+格式：
+变化描述：[2-3段反思]
+是否有漂移：是/否
+漂移详情：[如果是的说明]
+是否有成长：是/否
+成长详情：[如果是的说明]"""
+
+    def review(self) -> dict:
+        """
+        Perform a periodic personality review.
+
+        Compare current snapshot to previous ones.
+        Detect drift and growth.
+        Update personality state.
+
+        Returns:
+            dict: Review results including drift detection, growth detection, and LLM reflection
+        """
+        current_snapshot = self.take_snapshot()
+        previous_snapshot = self._get_previous_snapshot()
+
+        self.save_snapshot(current_snapshot)
+
+        drift_result = self.detect_drift(previous_snapshot, current_snapshot) if previous_snapshot else {
+            "detected": False,
+            "details": "No previous snapshot to compare"
         }
-        self._history_path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-    
-    def apply_review_insights(self, review: dict) -> list[str]:
+
+        growth_result = self.detect_growth(previous_snapshot, current_snapshot) if previous_snapshot else {
+            "detected": False,
+            "details": "No previous snapshot to compare"
+        }
+
+        review_prompt = self._build_review_prompt(previous_snapshot)
+        llm_reflection = self._get_llm_reflection(review_prompt)
+
+        result = {
+            "snapshot": current_snapshot,
+            "previous_snapshot": previous_snapshot,
+            "drift": drift_result,
+            "growth": growth_result,
+            "llm_reflection": llm_reflection,
+            "review_timestamp": datetime.now().isoformat(),
+        }
+
+        self._last_corpus_size = current_snapshot.world_corpus_size
+        self._last_review_cycles = self.state.total_cycles
+
+        return result
+
+    def _get_llm_reflection(self, prompt: str) -> dict:
         """
-        Apply insights from a review to modify parameters.
-        
-        Analyzes review results and adjusts parameters accordingly:
-        - If curiosity too high → lower it
-        - If fit_threshold miscalibrated → adjust
-        - If attention window too small → expand
-        
+        Get LLM reflection on the personality review.
+
         Args:
-            review: Dictionary containing review insights with keys like:
-                - curiosity_assessment: "too_high" | "too_low" | "balanced"
-                - fit_threshold_assessment: "too_strict" | "too_lenient" | "balanced"
-                - attention_assessment: "too_small" | "too_large" | "balanced"
-                - overall_notes: str
-                - review_id: Optional[str]
-        
+            prompt: The review prompt
+
         Returns:
-            list[str]: List of modified parameter names
+            dict: Parsed LLM response with reflection details
         """
-        from .state import AgentState
-        
-        state = AgentState.load(self._state_path)
-        modified: list[str] = []
-        review_id = review.get("review_id", datetime.now().strftime("%Y-%m-%d-review"))
-        
-        # Process curiosity level
-        curiosity_assessment = review.get("curiosity_assessment", "balanced")
-        if curiosity_assessment == "too_high":
-            new_value = self._calculate_gradual_change(
-                state.curiosity_level,
-                state.curiosity_level * 0.85,  # Reduce by ~15%
-                "curiosity_level"
-            )
-            if self.modify_parameter("curiosity_level", new_value, 
-                                     "Review showed curiosity too high", review_id):
-                modified.append("curiosity_level")
-        elif curiosity_assessment == "too_low":
-            new_value = self._calculate_gradual_change(
-                state.curiosity_level,
-                state.curiosity_level * 1.15,  # Increase by ~15%
-                "curiosity_level"
-            )
-            if self.modify_parameter("curiosity_level", new_value,
-                                     "Review showed curiosity too low", review_id):
-                modified.append("curiosity_level")
-        
-        # Process fit_threshold
-        fit_assessment = review.get("fit_threshold_assessment", "balanced")
-        if fit_assessment == "too_strict":
-            new_value = self._calculate_gradual_change(
-                state.fit_threshold,
-                state.fit_threshold * 1.15,  # More accepting
-                "fit_threshold"
-            )
-            if self.modify_parameter("fit_threshold", new_value,
-                                     "Review showed threshold too strict", review_id):
-                modified.append("fit_threshold")
-        elif fit_assessment == "too_lenient":
-            new_value = self._calculate_gradual_change(
-                state.fit_threshold,
-                state.fit_threshold * 0.85,  # More selective
-                "fit_threshold"
-            )
-            if self.modify_parameter("fit_threshold", new_value,
-                                     "Review showed threshold too lenient", review_id):
-                modified.append("fit_threshold")
-        
-        # Process attention_window_size
-        attention_assessment = review.get("attention_assessment", "balanced")
-        if attention_assessment == "too_small":
-            new_value = self._calculate_gradual_change(
-                float(state.attention_window_size),
-                float(state.attention_window_size) * 1.20,  # Expand by 20%
-                "attention_window_size"
-            )
-            if self.modify_parameter("attention_window_size", int(new_value),
-                                     "Review showed attention window too small", review_id):
-                modified.append("attention_window_size")
-        elif attention_assessment == "too_large":
-            new_value = self._calculate_gradual_change(
-                float(state.attention_window_size),
-                float(state.attention_window_size) * 0.80,  # Contract by 20%
-                "attention_window_size"
-            )
-            if self.modify_parameter("attention_window_size", int(new_value),
-                                     "Review showed attention window too large", review_id):
-                modified.append("attention_window_size")
-        
-        return modified
-    
-    def _calculate_gradual_change(
-        self,
-        current_value: float,
-        target_value: float,
-        param_name: str
-    ) -> float:
+        system_prompt = "你是无尽图书馆的居者。你正在反思自己的变化。"
+
+        try:
+            response = self.llm.complete_str(system_prompt, prompt)
+            return self._parse_llm_response(response)
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "raw_response": "",
+            }
+
+    def _parse_llm_response(self, response: str) -> dict:
+        """Parse the LLM response into structured data."""
+        import re
+
+        result: dict = {
+            "success": True,
+            "raw_response": response,
+        }
+
+        match = re.search(r'变化描述[：:]\s*\n?(.*?)(?=\n?是否有漂移|$)', response, re.DOTALL)
+        if match:
+            result["change_description"] = match.group(1).strip()
+
+        drift_match = re.search(r'是否有漂移[：:]\s*(是|否)', response)
+        if drift_match:
+            result["has_drift"] = drift_match.group(1) == "是"
+
+        drift_detail_match = re.search(r'漂移详情[：:]\s*\n?(.*?)(?=\n?是否有成长|$)', response, re.DOTALL)
+        if drift_detail_match:
+            result["drift_details"] = drift_detail_match.group(1).strip()
+
+        growth_match = re.search(r'是否有成长[：:]\s*(是|否)', response)
+        if growth_match:
+            result["has_growth"] = growth_match.group(1) == "是"
+
+        growth_detail_match = re.search(r'成长详情[：:]\s*\n?(.*?)$', response, re.DOTALL)
+        if growth_detail_match:
+            result["growth_details"] = growth_detail_match.group(1).strip()
+
+        return result
+
+    def detect_drift(self, old: Optional[PersonalitySnapshot], new: PersonalitySnapshot) -> dict:
         """
-        Calculate a gradual change that respects the max change rate.
-        
+        Detect significant personality drift.
+
+        Drift = unexpected changes in processing patterns or parameters.
+
         Args:
-            current_value: Current parameter value
-            target_value: Desired new value
-            param_name: Parameter name for validation
-            
+            old: Previous snapshot
+            new: Current snapshot
+
         Returns:
-            float: The new value, clamped to max change rate
+            dict: {detected: bool, details: str}
         """
-        if current_value == 0:
-            return target_value
-        
-        change_ratio = target_value / current_value
-        
-        # Clamp change to max rate (±20%)
-        if change_ratio > (1 + self.MAX_CHANGE_RATE):
-            change_ratio = 1 + self.MAX_CHANGE_RATE
-        elif change_ratio < (1 - self.MAX_CHANGE_RATE):
-            change_ratio = 1 - self.MAX_CHANGE_RATE
-        
-        new_value = current_value * change_ratio
-        
-        # Apply parameter-specific bounds
-        if param_name == "curiosity_level" or param_name == "fit_threshold":
-            new_value = max(0.0, min(1.0, new_value))
-        elif param_name == "attention_window_size":
-            # Round to nearest integer for attention window
-            new_value = max(1, min(20, round(new_value)))
-        
-        return new_value
-    
-    def modify_parameter(
-        self,
-        name: str,
-        value: Any,
-        reason: str,
-        review_id: Optional[str] = None
-    ) -> bool:
+        if old is None:
+            return {"detected": False, "details": "No previous snapshot"}
+
+        drift_details: list[str] = []
+
+        curiosity_change = abs(new.curiosity_level - old.curiosity_level)
+        if curiosity_change > 0.3:
+            drift_details.append(
+                f"好奇心强度大幅变化：{old.curiosity_level} -> {new.curiosity_level}"
+            )
+
+        fit_change = abs(new.fit_threshold - old.fit_threshold)
+        if fit_change > 0.3:
+            drift_details.append(
+                f"契合度阈值大幅变化：{old.fit_threshold} -> {new.fit_threshold}"
+            )
+
+        if new.attention_window_size != old.attention_window_size:
+            if abs(new.attention_window_size - old.attention_window_size) >= 2:
+                drift_details.append(
+                    f"注意力窗口变化：{old.attention_window_size} -> {new.attention_window_size}"
+                )
+
+        old_patterns_set = set(old.processing_patterns)
+        new_patterns_set = set(new.processing_patterns)
+
+        added_patterns = new_patterns_set - old_patterns_set
+        removed_patterns = old_patterns_set - new_patterns_set
+
+        if added_patterns:
+            drift_details.append(f"新增处理模式：{', '.join(added_patterns)}")
+        if removed_patterns:
+            drift_details.append(f"消失处理模式：{', '.join(removed_patterns)}")
+
+        corpus_change = new.world_corpus_size - old.world_corpus_size
+        if corpus_change > 20:
+            drift_details.append(
+                f"世界语料库快速增长：{old.world_corpus_size} -> {new.world_corpus_size} (+{corpus_change})"
+            )
+
+        return {
+            "detected": len(drift_details) > 0,
+            "details": "; ".join(drift_details) if drift_details else "无显著漂移"
+        }
+
+    def detect_growth(self, old: Optional[PersonalitySnapshot], new: PersonalitySnapshot) -> dict:
         """
-        Modify a single parameter.
-        
-        Protected parameters cannot be modified. All modifications are logged
-        with reasoning and timestamp.
-        
+        Detect personality growth.
+
+        Growth = meaningful evolution in understanding or approach.
+
         Args:
-            name: Parameter name to modify
-            value: New value for the parameter
-            reason: Why this modification is being made
-            review_id: Optional ID of the review that triggered this
-            
+            old: Previous snapshot
+            new: Current snapshot
+
         Returns:
-            bool: True if modification was successful, False if blocked
+            dict: {detected: bool, details: str}
         """
-        if not ProtectedParameters.can_modify(name):
-            return False
-        
-        from .state import AgentState
-        
-        state = AgentState.load(self._state_path)
-        
-        if not hasattr(state, name):
-            return False
-        
-        old_value = getattr(state, name)
-        
-        # Record the modification
-        modification = ParameterModification(
-            modified_at=datetime.now().isoformat(),
-            parameter=name,
-            old_value=old_value,
-            new_value=value,
-            reason=reason,
-            review_id=review_id,
-        )
-        self._modifications.append(modification)
-        self._save_history()
-        
-        # Apply to state
-        state.update(**{name: value})
-        state.save(self._state_path)
-        
-        return True
-    
-    def get_modification_history(self) -> list[dict]:
+        if old is None:
+            return {"detected": False, "details": "No previous snapshot"}
+
+        growth_details: list[str] = []
+
+        corpus_growth = new.world_corpus_size - old.world_corpus_size
+        if corpus_growth > 0:
+            growth_details.append(
+                f"世界语料库扩展：+{corpus_growth} 个新片段"
+            )
+
+        if new.curiosity_level > old.curiosity_level + 0.1:
+            growth_details.append(
+                f"好奇心提升：{old.curiosity_level:.2f} -> {new.curiosity_level:.2f}"
+            )
+
+        if len(new.processing_patterns) > len(old.processing_patterns):
+            new_patterns = set(new.processing_patterns) - set(old.processing_patterns)
+            if new_patterns:
+                growth_details.append(
+                    f"新的处理方式出现：{', '.join(new_patterns)}"
+                )
+
+        if new.attention_window_size > old.attention_window_size:
+            growth_details.append(
+                f"注意力窗口扩展：{old.attention_window_size} -> {new.attention_window_size}"
+            )
+
+        return {
+            "detected": len(growth_details) > 0,
+            "details": "; ".join(growth_details) if growth_details else "无显著成长"
+        }
+
+    def should_review(self) -> bool:
         """
-        Get history of parameter modifications.
-        
+        Check if it's time for a review.
+
+        Review triggered by:
+        - Time threshold (e.g., every 100 processing cycles)
+        - Significant corpus growth
+        - Manual trigger (always returns True if manual check requested)
+
         Returns:
-            list[dict]: List of modification records as dictionaries
+            bool: True if review should be triggered
         """
-        return [m.to_dict() for m in self._modifications]
-    
-    def rollback_parameter(self, name: str) -> bool:
-        """
-        Rollback a parameter to its previous value.
-        
-        Finds the most recent modification of the given parameter and
-        reverts it.
-        
-        Args:
-            name: Parameter name to rollback
-            
-        Returns:
-            bool: True if rollback was successful, False if no history found
-        """
-        # Find the most recent modification of this parameter
-        for mod in reversed(self._modifications):
-            if mod.parameter == name:
-                from .state import AgentState
-                
-                state = AgentState.load(self._state_path)
-                current_value = getattr(state, name, None)
-                
-                # Only rollback if value has actually changed
-                if current_value != mod.old_value:
-                    state.update(**{name: mod.old_value})
-                    state.save(self._state_path)
-                    
-                    # Record the rollback
-                    rollback_mod = ParameterModification(
-                        modified_at=datetime.now().isoformat(),
-                        parameter=name,
-                        old_value=current_value,
-                        new_value=mod.old_value,
-                        reason=f"Rollback of modification from {mod.modified_at}",
-                    )
-                    self._modifications.append(rollback_mod)
-                    self._save_history()
-                    
-                    return True
-                
-                return True  # Already at old value
-        
+        cycles_since_review = self.state.total_cycles - self._last_review_cycles
+        corpus_growth = self._get_corpus_size() - self._last_corpus_size
+
+        if cycles_since_review >= self.cycles_threshold:
+            return True
+
+        if corpus_growth >= self.corpus_growth_threshold:
+            return True
+
         return False
-    
-    def get_current_value(self, name: str) -> Any:
+
+    def get_evolution_summary(self) -> dict:
         """
-        Get the current value of a parameter.
-        
-        Args:
-            name: Parameter name
-            
+        Get a summary of the evolution history.
+
         Returns:
-            The current value, or None if parameter doesn't exist
+            dict: Evolution summary including snapshot count and trends
         """
-        from .state import AgentState
-        
-        try:
-            state = AgentState.load(self._state_path)
-            return getattr(state, name, None)
-        except FileNotFoundError:
-            return None
-    
-    def get_recent_modifications(self, limit: int = 10) -> list[dict]:
-        """
-        Get the most recent parameter modifications.
-        
-        Args:
-            limit: Maximum number of modifications to return
-            
-        Returns:
-            list[dict]: Most recent modifications as dictionaries
-        """
-        history = self.get_modification_history()
-        return history[-limit:] if len(history) > limit else history
-    
-    def suggest_modifications(self, review: dict) -> list[dict]:
-        """
-        Suggest what parameters should be modified based on review.
-        
-        Unlike apply_review_insights, this only suggests changes without
-        applying them. Useful for previewing before committing.
-        
-        Args:
-            review: Review dictionary (same format as apply_review_insights)
-            
-        Returns:
-            list[dict]: Suggested modifications with parameter, current, and suggested values
-        """
-        from .state import AgentState
-        
-        suggestions = []
-        
-        try:
-            state = AgentState.load(self._state_path)
-        except FileNotFoundError:
-            return suggestions
-        
-        # Curiosity suggestions
-        curiosity_assessment = review.get("curiosity_assessment", "balanced")
-        if curiosity_assessment in ("too_high", "too_low"):
-            direction = -1 if curiosity_assessment == "too_high" else 1
-            target = state.curiosity_level * (1 + direction * 0.15)
-            suggested = self._calculate_gradual_change(
-                state.curiosity_level, target, "curiosity_level"
-            )
-            suggestions.append({
-                "parameter": "curiosity_level",
-                "current": state.curiosity_level,
-                "suggested": suggested,
-                "direction": "decrease" if direction < 0 else "increase",
-                "reason": f"Review assessment: curiosity {curiosity_assessment}",
-            })
-        
-        # Fit threshold suggestions
-        fit_assessment = review.get("fit_threshold_assessment", "balanced")
-        if fit_assessment in ("too_strict", "too_lenient"):
-            direction = 1 if fit_assessment == "too_strict" else -1
-            target = state.fit_threshold * (1 + direction * 0.15)
-            suggested = self._calculate_gradual_change(
-                state.fit_threshold, target, "fit_threshold"
-            )
-            suggestions.append({
-                "parameter": "fit_threshold",
-                "current": state.fit_threshold,
-                "suggested": suggested,
-                "direction": "increase" if direction > 0 else "decrease",
-                "reason": f"Review assessment: fit_threshold {fit_assessment}",
-            })
-        
-        # Attention window suggestions
-        attention_assessment = review.get("attention_assessment", "balanced")
-        if attention_assessment in ("too_small", "too_large"):
-            direction = 1 if attention_assessment == "too_small" else -1
-            target = float(state.attention_window_size) * (1 + direction * 0.20)
-            suggested = self._calculate_gradual_change(
-                float(state.attention_window_size), target, "attention_window_size"
-            )
-            suggestions.append({
-                "parameter": "attention_window_size",
-                "current": state.attention_window_size,
-                "suggested": int(suggested),
-                "direction": "expand" if direction > 0 else "contract",
-                "reason": f"Review assessment: attention_window {attention_assessment}",
-            })
-        
-        return suggestions
+        snapshots = self.load_snapshots()
+
+        summary: dict = {
+            "total_snapshots": len(snapshots),
+            "oldest_snapshot": None,
+            "newest_snapshot": None,
+            "trends": {},
+        }
+
+        if not snapshots:
+            return summary
+
+        summary["oldest_snapshot"] = snapshots[0].captured_at.isoformat()
+        summary["newest_snapshot"] = snapshots[-1].captured_at.isoformat()
+
+        if len(snapshots) >= 2:
+            oldest = snapshots[0]
+            newest = snapshots[-1]
+
+            summary["trends"] = {
+                "curiosity_change": newest.curiosity_level - oldest.curiosity_level,
+                "fit_threshold_change": newest.fit_threshold - oldest.fit_threshold,
+                "attention_window_change": newest.attention_window_size - oldest.attention_window_size,
+                "corpus_growth": newest.world_corpus_size - oldest.world_corpus_size,
+                "processing_patterns_added": list(
+                    set(newest.processing_patterns) - set(oldest.processing_patterns)
+                ),
+            }
+
+        return summary
 
 
-__all__ = ["EvolutionSystem", "ProtectedParameters", "ParameterModification"]
+__all__ = ["EvolutionSystem", "PersonalitySnapshot"]

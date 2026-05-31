@@ -26,6 +26,7 @@ from .cycle import SleepWakeCycle
 from .dialogue import DialogueTurn, DialogueSession
 from .goals import Goal, GoalSystem, GoalStatus
 from .autonomous import AutonomousGoalCreator
+from .evolution import EvolutionSystem, ProtectedParameters, ParameterModification
 
 __all__ = [
     "initialize_agent",
@@ -52,6 +53,9 @@ __all__ = [
     "GoalSystem",
     "GoalStatus",
     "AutonomousGoalCreator",
+    "EvolutionSystem",
+    "ProtectedParameters",
+    "ParameterModification",
 ]
 
 

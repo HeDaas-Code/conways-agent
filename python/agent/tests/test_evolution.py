@@ -241,8 +241,8 @@ class TestEvolutionSystem:
         modified = system.apply_review_insights(review)
         
         assert "attention_window_size" in modified
-        # Should be increased
-        assert system.get_current_value("attention_window_size") > 3
+        # Should be increased (3 * 1.2 = 3.6, rounded to 4)
+        assert system.get_current_value("attention_window_size") >= 4
     
     def test_suggest_modifications(self, mock_state_file):
         """Test suggestion generation without applying changes."""

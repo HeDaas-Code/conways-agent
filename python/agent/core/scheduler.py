@@ -506,7 +506,8 @@ class Scheduler:
 
     def reset_weights(self) -> None:
         """Reset all weights to baseline (1.0)."""
-        new_weights = DriverWeights()
+        # Reset all weights to exactly 1.0 (the true baseline)
+        new_weights = DriverWeights(goal=1.0, curiosity=1.0, time=1.0)
         self.state.weights = new_weights
         self.weights = new_weights
 

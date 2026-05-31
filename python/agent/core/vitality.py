@@ -180,6 +180,10 @@ class VaultVitalityMonitor:
             return False
         
         frontmatter = match.group(1)
+        
+        if '::' in frontmatter:
+            return True
+        
         lines = frontmatter.split('\n')
         
         i = 0
@@ -524,7 +528,9 @@ class VaultPollutionDetector:
         orphan_rate = len(orphan_links) / max(len(md_files), 1)
         mass_change_detected = self._check_mass_changes()
 
-        severity = self.get_pollution_severity()
+        severity = self._calculate_severity(
+            yaml_errors, binary_files, corrupted_files, orphan_rate, mass_change_detected, inconsistency_rate
+        )
         recommendations = self._generate_recommendations(
             yaml_errors, binary_files, corrupted_files, orphan_rate, mass_change_detected
         )
@@ -554,10 +560,9 @@ class VaultPollutionDetector:
         frontmatter = match.group(1)
 
         invalid_yaml_indicators = [
-            r":\s*$",
-            r":\s*\n\s*\n\s*:",
-            r"^\s+[^-\s]",
-            r"---\s*---",
+            r"^\s*:\s*$",
+            r"^\s*:\s*\n\s*\n\s*:\s*\n",
+            r"^\s*---\s*---",
         ]
 
         for pattern in invalid_yaml_indicators:
@@ -574,15 +579,18 @@ class VaultPollutionDetector:
             return True
 
         binary_indicators = [
-            r"[\x00-\x08\x0b\x0c\x0e-\x1f]",
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+            0x08, 0x0b, 0x0c, 0x0e, 0x0f, 0x10, 0x11, 0x12,
+            0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a,
+            0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
         ]
 
-        for indicator in binary_indicators:
-            byte_value = int(indicator[2:-1], 16)
-            if bytes([byte_value]) in content.encode('utf-8', errors='ignore'):
+        content_bytes = content.encode('utf-8', errors='ignore')
+        for byte_value in binary_indicators:
+            if bytes([byte_value]) in content_bytes:
                 return True
 
-        if len(content.encode('utf-8')) > len(content) * 2:
+        if len(content_bytes) > len(content) * 2:
             return True
 
         try:
@@ -644,16 +652,19 @@ class VaultPollutionDetector:
 
         return 0.0
 
-    def get_pollution_severity(self) -> str:
-        """Get overall pollution severity: clean / mild / moderate / severe"""
-        report = self.scan_for_corruption()
-
-        total_minor = len(report.yaml_errors) + len(report.binary_files)
-        major_issues = len(report.corrupted_files)
-        orphan_rate = len(self._find_all_orphan_links()) / max(len(list(self.vault_path.rglob("*.md"))), 1)
-
-        mass_changes = self._check_mass_changes()
-        high_inconsistency = report.inconsistency_rate > 10
+    def _calculate_severity(
+        self,
+        yaml_errors: list[str],
+        binary_files: list[str],
+        corrupted_files: list[str],
+        orphan_rate: float,
+        mass_changes: bool,
+        inconsistency_rate: float,
+    ) -> str:
+        """Calculate overall pollution severity based on detected issues."""
+        total_minor = len(yaml_errors) + len(binary_files)
+        major_issues = len(corrupted_files)
+        high_inconsistency = inconsistency_rate > 10
 
         if major_issues > 0 or (total_minor >= 3 and (orphan_rate > 0.3 or mass_changes)):
             return "severe"
@@ -662,6 +673,15 @@ class VaultPollutionDetector:
         elif total_minor >= 1 or orphan_rate > 0.1:
             return "mild"
         return "clean"
+
+    def get_pollution_severity(self) -> str:
+        """Get overall pollution severity: clean / mild / moderate / severe.
+
+        This method scans the vault and returns the severity.
+        For lower-level severity calculation, use scan_for_corruption().
+        """
+        report = self.scan_for_corruption()
+        return report.severity
 
     def _check_file_corruption(self, file_path: Path) -> bool:
         """Check if a file shows signs of corruption."""

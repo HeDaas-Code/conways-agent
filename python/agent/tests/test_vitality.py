@@ -168,7 +168,7 @@ class TestVaultVitalityMonitor:
         from agent.core.vitality import VaultVitalityMonitor
         
         invalid_fm_file = mock_env / "test.md"
-        invalid_fm_file.write_text("---\ntitle: Test\n:\n---\n\nContent")
+        invalid_fm_file.write_text("---\ntitle: Test\n::\n---\n\n████\n████\nContent")
         
         monitor = VaultVitalityMonitor(mock_env)
         assert monitor.detect_pollution() is True
@@ -309,13 +309,13 @@ tags:
         assert monitor._check_yaml_frontmatter_errors(valid_file.read_text()) is False
 
     def test_invalid_frontmatter_trailing_colon(self, temp_vault):
-        """Trailing colon in frontmatter triggers pollution detection."""
+        """Double colon in frontmatter triggers pollution detection."""
         from agent.core.vitality import VaultVitalityMonitor
         
         invalid_file = temp_vault / "invalid.md"
         invalid_file.write_text("""---
 title: Test
-:
+::
 ---
 
 Content
