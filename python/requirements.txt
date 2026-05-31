@@ -5,3 +5,4 @@ rich>=13.0.0
 textual>=0.50.0
 uvicorn>=0.30.0
 fastapi>=0.110.0
+anthropic>=0.40.0
