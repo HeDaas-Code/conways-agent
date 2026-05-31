@@ -107,21 +107,139 @@ class EvolutionSystem:
     
     MAX_CHANGE_RATE: float = 0.20
     
-    def __init__(self, state_path: Optional[Path] = None):
+    def __init__(self, state: "AgentState", memory_system: "MemorySystem", llm_client: "LLMClient", state_path: Optional[Path] = None):
         """
         Initialize the evolution system.
         
         Args:
-            state_path: Path to agent state file. Defaults to agent/state.json.
+            state: The Agent's state
+            memory_system: The memory system
+            llm_client: The LLM client
+            state_path: Path to agent state file.
         """
         if state_path is None:
             from .vault import get_state_path
             state_path = get_state_path()
         
+        self.state = state
+        self.memory = memory_system
+        self.llm = llm_client
         self._state_path = state_path
         self._history_path = state_path.parent / "parameter-history.json"
         self._modifications: list[ParameterModification] = []
         self._load_history()
+        self._last_review_at: Optional[datetime] = None
+    
+    def take_snapshot(self) -> PersonalitySnapshot:
+        """Take a snapshot of current personality state."""
+        return PersonalitySnapshot(
+            captured_at=datetime.now(),
+            curiosity_level=self.state.curiosity_level,
+            fit_threshold=self.state.fit_threshold,
+            attention_window_size=self.state.attention_window_size,
+            active_goals_count=len(self.state.goals) if hasattr(self.state, "goals") else 0,
+            world_corpus_size=len(self.memory.read_all_fragments()) if self.memory else 0,
+            processing_patterns=[],
+            notes="",
+        )
+    
+    def review(self) -> dict:
+        """Perform a periodic personality review.
+        
+        Compare current snapshot to previous ones.
+        Detect drift and growth.
+        Update personality state.
+        """
+        from .memory import MemorySystem
+        
+        current = self.take_snapshot()
+        current_dict = current.to_dict()
+        
+        # LLM-based review
+        prompt = f"""你是无尽图书馆的居者。你正在回顾自己的变化。
+
+【当前状态】
+好奇心强度：{current.curiosity_level}
+契合度阈值：{current.fit_threshold}
+注意力窗口：{current.attention_window_size}
+世界语料库大小：{current.world_corpus_size}
+
+请回顾自己：你发生了什么变化？有什么是你之前不理解、现在理解了？
+
+格式：
+变化描述：2-3段反思
+是否有漂移：是/否
+漂移详情：说明
+是否有成长：是/否
+成长详情：说明
+"""
+        
+        response = self.llm.complete_str(
+            system="你是Agent的人格回顾助手。",
+            user=prompt
+        )
+        
+        review_result = {
+            "snapshot": current_dict,
+            "llm_review": response,
+            "reviewed_at": datetime.now().isoformat(),
+        }
+        
+        self._last_review_at = datetime.now()
+        return review_result
+    
+    def detect_drift(self, old: PersonalitySnapshot, new: PersonalitySnapshot) -> dict:
+        """Detect significant personality drift."""
+        drift_detected = False
+        details = []
+        
+        # Check curiosity drift
+        if abs(new.curiosity_level - old.curiosity_level) > 0.3:
+            drift_detected = True
+            details.append(f"好奇心强度从{old.curiosity_level}变为{new.curiosity_level}")
+        
+        # Check fit threshold drift
+        if abs(new.fit_threshold - old.fit_threshold) > 0.2:
+            drift_detected = True
+            details.append(f"契合度阈值从{old.fit_threshold}变为{new.fit_threshold}")
+        
+        return {"detected": drift_detected, "details": "; ".join(details) if details else "无明显漂移"}
+    
+    def detect_growth(self, old: PersonalitySnapshot, new: PersonalitySnapshot) -> dict:
+        """Detect personality growth."""
+        growth_detected = False
+        details = []
+        
+        # More corpus = growth
+        if new.world_corpus_size > old.world_corpus_size * 1.2:
+            growth_detected = True
+            details.append(f"世界语料库从{old.world_corpus_size}增加到{new.world_corpus_size}")
+        
+        return {"detected": growth_detected, "details": "; ".join(details) if details else "无明显成长"}
+    
+    def should_review(self) -> bool:
+        """Check if it's time for a review.
+        
+        Review triggered by:
+        - Time threshold (every 100 processing cycles)
+        - Significant corpus growth
+        - Manual trigger
+        """
+        if self._last_review_at is None:
+            return True
+        
+        # Review every 100 cycles
+        from .state import AgentState
+        if hasattr(self.state, "total_cycles"):
+            if self.state.total_cycles % 100 == 0:
+                return True
+        
+        # Review if more than 7 days since last review
+        elapsed = datetime.now() - self._last_review_at
+        if elapsed.days >= 7:
+            return True
+        
+        return False
     
     def _load_history(self) -> None:
         """Load modification history from file."""
@@ -463,6 +581,7 @@ class EvolutionSystem:
         return suggestions
 
 
+@dataclass
 class PersonalitySnapshot:
     """Snapshot of personality state at a point in time."""
     captured_at: datetime
