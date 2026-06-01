@@ -1,0 +1,8 @@
+{
+  "id": "conways-agent",
+  "name": "Conway's Agent",
+  "version": "0.1.0",
+  "description": "Obsidian Agent sidebar plugin — A conversational interface for Conway's Agent",
+  "author": "HeDaas",
+  "minAppVersion": "0.12.0"
+}
