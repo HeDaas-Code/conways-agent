@@ -34,7 +34,7 @@ load_dotenv()
 
 # Ensure vault path is set
 from agent.core.vault import ensure_vault_dirs, get_vault_path
-from agent.core.ws_server import WSServer, ws_endpoint, WSMessage, MessageType
+from agent.core.ws_server import WSServer, ws_endpoint, WSMessage, MessageType, get_server
 from agent.core.mode_machine import ModeMachine, Mode
 from agent import log_event
 
@@ -64,6 +64,7 @@ async def lifespan(app: FastAPI):
     _startup_time = datetime.now()
     _mode_machine = ModeMachine()
     _ws_server = WSServer()
+    get_server(override=_ws_server)  # inject so ws_endpoint uses the same instance
     _ws_server.mode_controller.mode_machine = _mode_machine
     
     print(f"[Agent] 启动于 {_startup_time.isoformat()}")
@@ -129,12 +130,15 @@ async def health():
         raise HTTPException(status_code=503, detail="Agent not initialized")
     
     vault_path = str(get_vault_path())
-    
+
+    server = get_server()
+    mode = server.mode_controller.get_current_mode().value if server else "unknown"
+
     return HealthResponse(
         status="ok",
         uptime_seconds=(datetime.now() - _startup_time).total_seconds(),
         vault_path=vault_path,
-        mode=_mode_machine.state.mode.value if _mode_machine else "unknown",
+        mode=mode,
     )
 
 
@@ -143,10 +147,11 @@ async def get_mode():
     """Get current agent mode."""
     if _mode_machine is None:
         raise HTTPException(status_code=503, detail="Agent not initialized")
-    
+
+    server = get_server()
     return ModeResponse(
-        mode=_mode_machine.state.mode.value,
-        ws_connected=_mode_machine.state.ws_connected.value == "connected",
+        mode=server.mode_controller.get_current_mode().value,
+        ws_connected=server.mode_controller.mode_machine.state.ws_connected.value == "connected",
     )
 
 

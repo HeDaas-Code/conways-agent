@@ -30,6 +30,7 @@ class LLMResponse:
     content: str
     model: str
     usage: dict
+    thinking: str = ""
 
 
 class LLMClient:
@@ -115,13 +116,16 @@ class LLMClient:
         )
 
         content = ""
+        thinking = ""
         for block in resp.content:
             if hasattr(block, "text") and block.text:
                 content = block.text
-                break
+            elif hasattr(block, "thinking") and block.thinking:
+                thinking = block.thinking
 
         return LLMResponse(
             content=content.strip() if content else content,
+            thinking=thinking,
             model=self.model,
             usage={
                 "input_tokens": resp.usage.input_tokens,

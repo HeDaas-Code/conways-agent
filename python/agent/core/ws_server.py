@@ -289,9 +289,15 @@ class WSServer:
 _server: Optional[WSServer] = None
 
 
-def get_server() -> WSServer:
-    """Get or create the global WebSocket server instance."""
+def get_server(override: Optional["WSServer"] = None) -> WSServer:
+    """Get or create the global WebSocket server instance.
+
+    Args:
+        override: If provided, set as the global instance (used by api_server lifespan).
+    """
     global _server
+    if override is not None:
+        _server = override
     if _server is None:
         _server = WSServer()
     return _server

@@ -48,14 +48,22 @@ class StreamingPipeline:
         Stream LLM output as dicts with 'type' and 'content' keys.
         Subclasses can override to customize LLM integration.
         """
-        # Default: call LLMClient and yield simple response
-        response = self._llm.complete_str(
-            system="You are a helpful assistant.",
-            user=message,
+        # Run blocking LLM call in thread pool to avoid blocking event loop
+        resp = await asyncio.to_thread(
+            self._llm.complete,
+            [{"role": "system", "content": "You are a helpful assistant."},
+             {"role": "user", "content": message}],
         )
-        yield {"type": "thinking", "content": ""}  # Empty thinking to skip
+
+        thinking = getattr(resp, "thinking", "") or ""
+        if thinking:
+            yield {"type": "thinking", "content": thinking}
+
         yield {"type": "thinking_done"}
-        yield {"type": "response", "content": response}
+
+        response = getattr(resp, "content", "") or ""
+        if response:
+            yield {"type": "response", "content": response}
 
     async def process_message(
         self, message: str

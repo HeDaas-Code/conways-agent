@@ -9,9 +9,14 @@ __pycache__/
 venv/
 .env
 
+# E2E test (独立测试环境)
+e2e_test/
+
 # Node.js
 node_modules/
 dist/
+node/src/*.js
+node/agent/main.js
 
 # Agent vault (运行时生成)
 agent/goals/*
